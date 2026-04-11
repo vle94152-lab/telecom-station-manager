@@ -758,8 +758,8 @@ const text = rawText.trim();
           console.warn("VITE_GEMINI_API_KEY is not defined. Skipping AI validation.");
         }
       } catch (err) {
-        console.error("AI Validation error:", err);
-alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI");
+       console.error("AI Validation error:", err);
+alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI: " + (err instanceof Error ? err.message : String(err)));
       }
       setIsValidating(false);
 
