@@ -469,7 +469,7 @@ function NavButton({ active, onClick, icon, label }: any) {
 async function generateWithRetry(
   ai: GoogleGenAI,
   prompt: string,
-  model = "gemini-2.5-flash-lite",
+  model = "gemini-2.5-flash",
   retries = 3
 ) {
   let lastError: unknown;
@@ -775,7 +775,7 @@ Chỉ cảnh báo nếu:
 - Tọa độ nằm ở tỉnh/thành khác rất xa so với địa chỉ
 - Tọa độ nằm ngoài biển
 - Tọa độ nằm ngoài lãnh thổ Việt Nam
-- Sai lệch lớn trên 1 km
+- Sai lệch lớn trên 20 km
 
 Trả về kết quả dưới dạng mảng JSON:
 [
@@ -792,7 +792,7 @@ Chỉ trả về JSON, không giải thích thêm.`;
           const response = await generateWithRetry(
             ai,
             prompt,
-            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
             3
           );
 
@@ -1575,7 +1575,7 @@ Không giải thích gì thêm.`;
       const response = await generateWithRetry(
         ai,
         prompt,
-        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
         3
       );
 
