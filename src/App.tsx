@@ -1506,7 +1506,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     ? await response.text()
     : (response.text || '');
 
-const result = rawText.trim().split(',').map(id => id.trim());const result = response.text?.trim().split(',').map(id => id.trim());
+const result = rawText.trim().split(',').map(id => id.trim());
       if (result && result.length === selectedStationIds.length) {
         setOptimizedRoute(result);
         setSelectedStationIds(result);
