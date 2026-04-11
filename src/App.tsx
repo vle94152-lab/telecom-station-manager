@@ -386,6 +386,7 @@ export default function App() {
         {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
         {activeTab === 'stations' && <StationsTab key="stations" stations={stations} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
         {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} />}
+        {activeTab === 'reports' && <ReportsTab key="reports" reports={reports} stations={stations} user={user} />}
         {activeTab === 'settings' && <SettingsTab key="settings" user={user} logout={logout} />}
       </main>
 
@@ -408,8 +409,15 @@ export default function App() {
           {/* Floating Action Button */}
           <div className="relative -top-8 flex justify-center w-16">
             <div className="absolute w-20 h-20 bg-white rounded-full -top-2 flex items-center justify-center shadow-[0_-10px_20px_-5px_rgba(0,0,0,0.05)]">
-              <button className="w-16 h-16 bg-[#b90000] rounded-full flex items-center justify-center text-white shadow-lg hover:bg-red-800 transition-colors">
-                <span className="text-4xl font-light leading-none mb-1">+</span>
+              <button 
+                onClick={() => setActiveTab('reports')}
+                className={cn(
+                  "w-16 h-16 rounded-full flex items-center justify-center text-white shadow-lg transition-colors",
+                  activeTab === 'reports' ? "bg-blue-600 hover:bg-blue-700" : "bg-[#b90000] hover:bg-red-800"
+                )}
+                aria-label="Mở báo cáo"
+              >
+                <FileText className="w-7 h-7" />
               </button>
             </div>
           </div>
@@ -2086,6 +2094,192 @@ Không giải thích gì thêm.`;
   );
 }
 
+function ReportsTab({ reports, stations, user }: { reports: Report[], stations: Station[], user: User }) {
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'pending'>('all');
+  const [reportTemplate, setReportTemplate] = useState(`1) Thông tin trạm:
+- Tên trạm:
+- Mã trạm:
+- Địa chỉ:
+
+2) Công việc thực hiện:
+- Hạng mục:
+- Chi tiết thao tác:
+- Kết quả:
+
+3) Tình trạng thiết bị:
+- Nguồn điện:
+- Truyền dẫn:
+- Thiết bị chính:
+
+4) Sự cố/rủi ro:
+- Mô tả:
+- Mức độ ảnh hưởng:
+- Biện pháp xử lý tạm thời:
+
+5) Kiến nghị:
+- Vật tư/nhân lực cần bổ sung:
+- Kế hoạch follow-up:
+`);
+  const [copyStatus, setCopyStatus] = useState('');
+
+  const stationsMap = useMemo(() => {
+    return stations.reduce<Record<string, Station>>((acc, station) => {
+      acc[station.id] = station;
+      return acc;
+    }, {});
+  }, [stations]);
+
+  const selectedDateReports = useMemo(() => {
+    return reports.filter(report => report.date === selectedDate);
+  }, [reports, selectedDate]);
+
+  const filteredReports = useMemo(() => {
+    return selectedDateReports.filter(report => {
+      const stationName = report.stationName || stationsMap[report.stationId]?.name || '';
+      const keyword = search.toLowerCase();
+      const matchesSearch =
+        !keyword ||
+        stationName.toLowerCase().includes(keyword) ||
+        report.content.toLowerCase().includes(keyword);
+      const matchesStatus = statusFilter === 'all' || report.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [selectedDateReports, search, statusFilter, stationsMap]);
+
+  const monthlyStats = useMemo(() => {
+    const start = startOfMonth(parseISO(selectedDate));
+    const end = endOfMonth(parseISO(selectedDate));
+    const inMonth = reports.filter(r => isWithinInterval(parseISO(r.date), { start, end }));
+    const completed = inMonth.filter(r => r.status === 'completed').length;
+    const pending = inMonth.length - completed;
+    return { total: inMonth.length, completed, pending };
+  }, [reports, selectedDate]);
+
+  const copyTemplate = async () => {
+    try {
+      await navigator.clipboard.writeText(reportTemplate);
+      setCopyStatus('Đã sao chép mẫu báo cáo.');
+      setTimeout(() => setCopyStatus(''), 2000);
+    } catch (error) {
+      console.error(error);
+      setCopyStatus('Không thể sao chép. Hãy copy thủ công.');
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+      className="space-y-6 w-full"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h2 className="text-2xl font-bold text-gray-900">Báo cáo công việc</h2>
+        <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-gray-200">
+          <Calendar className="w-4 h-4 text-gray-400 ml-2" />
+          <input
+            type="date"
+            className="bg-transparent border-none focus:ring-0 text-sm font-medium"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Card className="p-3 text-center">
+          <p className="text-xs text-gray-500">Báo cáo tháng</p>
+          <p className="text-2xl font-bold text-blue-600">{monthlyStats.total}</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-xs text-gray-500">Hoàn thành</p>
+          <p className="text-2xl font-bold text-green-600">{monthlyStats.completed}</p>
+        </Card>
+        <Card className="p-3 text-center">
+          <p className="text-xs text-gray-500">Chờ xử lý</p>
+          <p className="text-2xl font-bold text-amber-600">{monthlyStats.pending}</p>
+        </Card>
+      </div>
+
+      <Card className="p-4">
+        <h3 className="font-bold text-gray-900 mb-3">Form báo cáo đề xuất (tối ưu cho đội vận hành)</h3>
+        <p className="text-sm text-gray-600 mb-3">
+          Mẫu này ưu tiên đủ thông tin cho kỹ thuật + quản lý: hiện trạng, xử lý, rủi ro, kiến nghị và kế hoạch follow-up.
+        </p>
+        <textarea
+          className="w-full border border-gray-300 rounded-lg p-3 min-h-[220px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+          value={reportTemplate}
+          onChange={(e) => setReportTemplate(e.target.value)}
+        />
+        <div className="flex items-center justify-between mt-3">
+          <span className="text-xs text-gray-500">{copyStatus || 'Bạn có thể tùy biến mẫu theo đơn vị.'}</span>
+          <Button onClick={copyTemplate} variant="outline">
+            <Copy className="w-4 h-4" /> Sao chép mẫu
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex flex-col sm:flex-row gap-2 mb-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Tìm theo tên trạm hoặc nội dung..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <select
+            className="w-full sm:w-44 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as 'all' | 'completed' | 'pending')}
+          >
+            <option value="all">Tất cả trạng thái</option>
+            <option value="completed">Hoàn thành</option>
+            <option value="pending">Chờ xử lý</option>
+          </select>
+        </div>
+
+        <div className="space-y-3">
+          {filteredReports.length === 0 ? (
+            <div className="text-center py-8 text-gray-500 text-sm">
+              Chưa có báo cáo phù hợp bộ lọc trong ngày đã chọn.
+            </div>
+          ) : (
+            filteredReports.map(report => {
+              const station = stationsMap[report.stationId];
+              return (
+                <div key={report.id} className="border border-gray-200 rounded-xl p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="font-bold text-gray-900">{report.stationName || station?.name || 'Không xác định trạm'}</h4>
+                      <p className="text-xs text-gray-500 mt-1">Ngày: {format(parseISO(report.date), 'dd/MM/yyyy')}</p>
+                    </div>
+                    <span className={cn(
+                      "text-xs font-semibold px-2 py-1 rounded-full",
+                      report.status === 'completed' ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                    )}>
+                      {report.status === 'completed' ? 'Hoàn thành' : 'Chờ xử lý'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-700 mt-3 whitespace-pre-wrap">{report.content}</p>
+                  <div className="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-100">
+                    Người thực hiện: {user.displayName || user.email || 'Không xác định'} • Số lần chỉnh sửa: {report.history?.length || 0}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </Card>
+    </motion.div>
+  );
+}
+
 function SettingsTab({ user, logout }: { user: User, logout: () => void }) {
   return (
     <motion.div 
@@ -2512,5 +2706,3 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
     </motion.div>
   );
 }
-
-
