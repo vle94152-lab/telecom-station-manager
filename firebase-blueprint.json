@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "Station": {
+      "title": "Station",
+      "description": "Thông tin trạm viễn thông",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Tên trạm" },
+        "latitude": { "type": "number", "description": "Vĩ độ" },
+        "longitude": { "type": "number", "description": "Kinh độ" },
+        "address": { "type": "string", "description": "Địa chỉ" },
+        "managerName": { "type": "string", "description": "Người quản lý" },
+        "managerPhone": { "type": "string", "description": "Số điện thoại" },
+        "icon": { "type": "string", "description": "Biểu tượng hoặc hình ảnh trạm (Base64/URL)" }
+      },
+      "required": ["name", "latitude", "longitude", "address", "managerName", "managerPhone"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Báo cáo công việc",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID người thực hiện" },
+        "stationId": { "type": "string", "description": "ID trạm" },
+        "date": { "type": "string", "format": "date", "description": "Ngày thực hiện" },
+        "content": { "type": "string", "description": "Nội dung công việc" },
+        "status": { "type": "string", "enum": ["completed", "pending"], "description": "Trạng thái" }
+      },
+      "required": ["userId", "stationId", "date", "content", "status"]
+    },
+    "DailyPlan": {
+      "title": "DailyPlan",
+      "description": "Kế hoạch làm việc hàng ngày",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID người dùng" },
+        "date": { "type": "string", "format": "date", "description": "Ngày lập kế hoạch" },
+        "stationIds": { "type": "array", "items": { "type": "string" }, "description": "Danh sách ID trạm" }
+      },
+      "required": ["userId", "date", "stationIds"]
+    }
+  },
+  "firestore": {
+    "/stations/{stationId}": { "schema": "Station", "description": "Danh sách các trạm" },
+    "/reports/{reportId}": { "schema": "Report", "description": "Báo cáo công việc" },
+    "/dailyPlans/{planId}": { "schema": "DailyPlan", "description": "Kế hoạch ngày" }
+  }
+}

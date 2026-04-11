@@ -1,0 +1,95 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: stations
+// Fields:
+//   - name: string (required)
+//   - latitude: number (required)
+//   - longitude: number (required)
+//   - address: string (required)
+//   - managerName: string (required)
+//   - managerPhone: string (required)
+//
+// Collection: reports
+// Fields:
+//   - userId: string (required)
+//   - stationId: string (required)
+//   - date: string (required, YYYY-MM-DD)
+//   - content: string (required)
+//   - status: string (required, enum: ['completed', 'pending'])
+//
+// Collection: dailyPlans
+// Fields:
+//   - userId: string (required)
+//   - date: string (required, YYYY-MM-DD)
+//   - stationIds: list (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidStation(data) {
+      return data.keys().hasAll(['name', 'latitude', 'longitude', 'address', 'managerName', 'managerPhone']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.latitude is number && data.longitude is number &&
+             data.address is string && data.address.size() >= 0 && data.address.size() < 500 &&
+             data.managerName is string && data.managerName.size() >= 0 && data.managerName.size() < 100 &&
+             data.managerPhone is string && data.managerPhone.size() >= 0 && data.managerPhone.size() < 50 &&
+             (!('icon' in data) || (data.icon is string && data.icon.size() < 1048576)); // Max 1MB for base64 icon
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['userId', 'stationId', 'date', 'content', 'status']) &&
+             data.userId == request.auth.uid &&
+             data.stationId is string &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             data.status in ['completed', 'pending'];
+    }
+
+    function isValidDailyPlan(data) {
+      return data.keys().hasAll(['userId', 'date', 'stationIds']) &&
+             data.userId == request.auth.uid &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.stationIds is list && data.stationIds.size() <= 100;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /stations/{stationId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidStation(request.resource.data);
+      allow delete: if isAuthenticated(); // In a real app, maybe only admin
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAuthenticated(); // Or only owner: if isOwner(resource.data.userId)
+      allow create: if isAuthenticated() && isValidReport(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidReport(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /dailyPlans/{planId} {
+      allow read: if isAuthenticated() && isOwner(resource.data.userId);
+      allow create: if isAuthenticated() && isValidDailyPlan(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidDailyPlan(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+  }
+}
