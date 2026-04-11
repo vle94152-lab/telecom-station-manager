@@ -1,0 +1,3 @@
+@'
+[PASTE_PATCH_O_DUOI_DAY]
+'@ | Set-Content -Path reports.patch -Encoding UTF8
