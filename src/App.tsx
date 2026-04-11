@@ -643,17 +643,10 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           reader.readAsArrayBuffer(file);
         });
         
-        const read = XLSX.read || (XLSX as any).default?.read;
-        const utils = XLSX.utils || (XLSX as any).default?.utils;
-        
-        if (!read || !utils) {
-          throw new Error('Thư viện đọc Excel (XLSX) không khả dụng.');
-        }
-        
-        const workbook = read(arrayBuffer, { type: 'array' });
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        data = utils.sheet_to_json(worksheet);
+        data = XLSX.utils.sheet_to_json(worksheet);
       } else {
         throw new Error('Định dạng file không được hỗ trợ. Vui lòng tải lên file .csv, .txt, .xlsx, hoặc .xls');
       }
@@ -1345,6 +1338,25 @@ Vui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.
   );
 }
 
+
+const WORK_GROUPS = [
+  { id: 'maintenance', name: 'Bảo trì' },
+  { id: 'inspection', name: 'Đo kiểm' },
+  { id: 'repair', name: 'Sửa chữa' },
+  { id: 'power', name: 'Nguồn điện' },
+];
+
+const WORK_ITEMS = [
+  { id: 'maintenance_cleaning', groupId: 'maintenance', name: 'Vệ sinh thiết bị' },
+  { id: 'maintenance_cable', groupId: 'maintenance', name: 'Kiểm tra cáp nối' },
+  { id: 'inspection_signal', groupId: 'inspection', name: 'Đo kiểm tín hiệu' },
+  { id: 'inspection_ping', groupId: 'inspection', name: 'Kiểm tra kết nối mạng' },
+  { id: 'repair_module', groupId: 'repair', name: 'Thay thế module lỗi' },
+  { id: 'repair_hardware', groupId: 'repair', name: 'Khắc phục lỗi phần cứng' },
+  { id: 'power_battery', groupId: 'power', name: 'Kiểm tra pin dự phòng' },
+  { id: 'power_ups', groupId: 'power', name: 'Kiểm tra UPS / nguồn' },
+];
+
 function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station[], dailyPlans: DailyPlan[], user: User, reports: Report[] }) {
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedStationIds, setSelectedStationIds] = useState<string[]>([]);
@@ -1357,6 +1369,8 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
   const [confirmSavePlan, setConfirmSavePlan] = useState(false);
   const [stationToRemove, setStationToRemove] = useState<Station | null>(null);
   const [reportModalStation, setReportModalStation] = useState<Station | null>(null);
+  const [reportWorkGroupId, setReportWorkGroupId] = useState('');
+  const [reportWorkItemId, setReportWorkItemId] = useState('');
   const [reportContent, setReportContent] = useState('');
   const [confirmSaveReport, setConfirmSaveReport] = useState(false);
   
@@ -1480,7 +1494,9 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
 
   const openReportModal = (station: Station) => {
     const existing = reports.find(r => r.stationId === station.id && r.date === selectedDate);
-    setReportContent(existing?.content || '');
+    setReportWorkGroupId(existing?.workGroupId || '');
+    setReportWorkItemId(existing?.workItemId || '');
+    setReportContent(existing?.workDetail || existing?.content || '');
     setReportModalStation(station);
   };
 
@@ -1488,35 +1504,71 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     if (!reportModalStation) return;
     const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
     const now = new Date().toISOString();
-    
+    const trimmedContent = reportContent.trim();
+    const selectedGroup = WORK_GROUPS.find(group => group.id === reportWorkGroupId);
+    const selectedItem = WORK_ITEMS.find(item => item.id === reportWorkItemId);
+
+    if (!selectedGroup) {
+      alert('Vui lòng chọn nhóm công việc.');
+      return;
+    }
+
+    if (!selectedItem) {
+      alert('Vui lòng chọn nội dung công việc.');
+      return;
+    }
+
+    if (!trimmedContent) {
+      alert('Chi tiết công việc không được để trống.');
+      return;
+    }
+
     try {
       if (existing) {
-        const historyEntry = {
-          userId: user.uid,
-          userName: user.email || 'Unknown',
-          timestamp: now,
-          content: existing.content || ''
-        };
-        await updateDoc(doc(db, 'reports', existing.id), {
-          content: reportContent,
+        const updatePayload: Record<string, unknown> = {
+          content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: selectedGroup.id,
+          workGroupName: selectedGroup.name,
+          workItemId: selectedItem.id,
+          workItemName: selectedItem.name,
           updatedAt: now,
-          history: arrayUnion(historyEntry)
-        });
+        };
+
+        if ((existing.content || '').trim() !== trimmedContent) {
+          updatePayload.history = arrayUnion({
+            userId: user.uid,
+            userName: user.email || 'Unknown',
+            timestamp: now,
+            content: existing.content || ''
+          });
+        }
+
+        await updateDoc(doc(db, 'reports', existing.id), updatePayload);
       } else {
         await addDoc(collection(db, 'reports'), {
           stationId: reportModalStation.id,
           stationName: reportModalStation.name,
           userId: user.uid,
           date: selectedDate,
-          content: reportContent,
+          content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: selectedGroup.id,
+          workGroupName: selectedGroup.name,
+          workItemId: selectedItem.id,
+          workItemName: selectedItem.name,
           status: 'completed',
           createdAt: now,
           updatedAt: now,
           history: []
         });
-        await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       }
+
+      await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       setReportModalStation(null);
+      setReportWorkGroupId('');
+      setReportWorkItemId('');
+      setReportContent('');
       alert('Đã cập nhật báo cáo công việc!');
     } catch (err) {
       console.error(err);
@@ -1907,7 +1959,7 @@ Không giải thích gì thêm.`;
             >
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-900">Cập nhật công việc</h3>
-                <button onClick={() => setReportModalStation(null)} className="text-gray-400 hover:text-gray-600">
+                <button onClick={() => { setReportModalStation(null); setReportWorkGroupId(''); setReportWorkItemId(''); setReportContent(''); }} className="text-gray-400 hover:text-gray-600">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -1919,7 +1971,39 @@ Không giải thích gì thêm.`;
                 </div>
                 
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung công việc đã thực hiện</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nhóm công việc</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    value={reportWorkGroupId}
+                    onChange={(e) => {
+                      setReportWorkGroupId(e.target.value);
+                      setReportWorkItemId('');
+                    }}
+                  >
+                    <option value="">Chọn nhóm công việc</option>
+                    {WORK_GROUPS.map(group => (
+                      <option key={group.id} value={group.id}>{group.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung công việc</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    value={reportWorkItemId}
+                    onChange={(e) => setReportWorkItemId(e.target.value)}
+                    disabled={!reportWorkGroupId}
+                  >
+                    <option value="">Chọn nội dung công việc</option>
+                    {WORK_ITEMS.filter(item => item.groupId === reportWorkGroupId).map(item => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Chi tiết công việc</label>
                   <textarea
                     className="w-full border border-gray-300 rounded-lg p-3 min-h-[120px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                     placeholder="Nhập chi tiết công việc, tình trạng thiết bị..."
@@ -1947,10 +2031,10 @@ Không giải thích gì thêm.`;
               </div>
               
               <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
-                <Button variant="secondary" className="flex-1" onClick={() => setReportModalStation(null)}>
+                <Button variant="secondary" className="flex-1" onClick={() => { setReportModalStation(null); setReportWorkGroupId(''); setReportWorkItemId(''); setReportContent(''); }}>
                   Hủy
                 </Button>
-                <Button className="flex-1" onClick={() => setConfirmSaveReport(true)} disabled={!reportContent.trim()}>
+                <Button className="flex-1" onClick={() => setConfirmSaveReport(true)} disabled={!reportWorkGroupId || !reportWorkItemId || !reportContent.trim()}>
                   Lưu báo cáo
                 </Button>
               </div>
