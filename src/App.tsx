@@ -717,7 +717,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
       let warnings: ValidationWarning[] = [];
       try {
         if (import.meta.env.VITE_GEMINI_API_KEY) {
-          const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+         const ai = new GoogleGenAI({ apiKey });
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
           ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
           
@@ -740,7 +740,12 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
             contents: prompt,
           });
 
-          const text = response.text?.trim() || '[]';
+          const rawText =
+  typeof response.text === 'function'
+    ? await response.text()
+    : (response.text || '[]');
+
+const text = rawText.trim();
           const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsedWarnings = JSON.parse(jsonStr);
           warnings = parsedWarnings.map((w: any) => ({
@@ -1496,7 +1501,12 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
       });
 
       setOptimizeProgress('Đang hoàn thiện lộ trình...');
-      const result = response.text?.trim().split(',').map(id => id.trim());
+      const rawText =
+  typeof response.text === 'function'
+    ? await response.text()
+    : (response.text || '');
+
+const result = rawText.trim().split(',').map(id => id.trim());const result = response.text?.trim().split(',').map(id => id.trim());
       if (result && result.length === selectedStationIds.length) {
         setOptimizedRoute(result);
         setSelectedStationIds(result);
