@@ -161,6 +161,32 @@ const uncheckedIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
+
+const formatHistoryTimestamp = (timestamp: unknown) => {
+  try {
+    if (!timestamp) return 'Không rõ thời gian';
+
+    if (typeof timestamp === 'string') {
+      return format(parseISO(timestamp), 'dd/MM/yyyy HH:mm');
+    }
+
+    if (timestamp instanceof Date) {
+      return format(timestamp, 'dd/MM/yyyy HH:mm');
+    }
+
+    if (typeof timestamp === 'object' && timestamp !== null && 'toDate' in (timestamp as Record<string, unknown>)) {
+      const toDate = (timestamp as { toDate?: () => Date }).toDate;
+      if (typeof toDate === 'function') {
+        return format(toDate(), 'dd/MM/yyyy HH:mm');
+      }
+    }
+  } catch (error) {
+    console.warn('Cannot parse history timestamp', error);
+  }
+
+  return 'Không rõ thời gian';
+};
+
 const formatStationName = (name: string) => {
   if (!name) return '';
   const parts = name.split(/[-_]/);
@@ -2020,7 +2046,7 @@ Không giải thích gì thêm.`;
                         <div key={i} className="bg-gray-50 p-3 rounded-lg text-sm">
                           <div className="flex justify-between text-xs text-gray-500 mb-1">
                             <span className="font-medium text-gray-700">{h.userName}</span>
-                            <span>{format(parseISO(h.timestamp), 'dd/MM/yyyy HH:mm')}</span>
+                            <span>{formatHistoryTimestamp(h.timestamp)}</span>
                           </div>
                           <p className="text-gray-600 whitespace-pre-wrap">{h.content}</p>
                         </div>
