@@ -1539,9 +1539,21 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
     const now = new Date().toISOString();
     const trimmedContent = reportContent.trim();
+    const selectedGroup = WORK_GROUPS.find(group => group.id === reportWorkGroupId);
+    const selectedItem = WORK_ITEMS.find(item => item.id === reportWorkItemId && item.groupId === reportWorkGroupId);
+
+    if (!selectedGroup) {
+      alert('Vui lòng chọn nhóm công việc.');
+      return;
+    }
+
+    if (!selectedItem) {
+      alert('Vui lòng chọn nội dung công việc hợp lệ.');
+      return;
+    }
 
     if (!trimmedContent) {
-      alert('Nội dung báo cáo không được để trống.');
+      alert('Nội dung/chi tiết báo cáo không được để trống.');
       return;
     }
 
@@ -1549,6 +1561,11 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
       if (existing) {
         const updatePayload: Record<string, unknown> = {
           content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: selectedGroup.id,
+          workGroupName: selectedGroup.name,
+          workItemId: selectedItem.id,
+          workItemName: selectedItem.name,
           updatedAt: now,
         };
 
@@ -1569,6 +1586,11 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
           userId: user.uid,
           date: selectedDate,
           content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: selectedGroup.id,
+          workGroupName: selectedGroup.name,
+          workItemId: selectedItem.id,
+          workItemName: selectedItem.name,
           status: 'completed',
           createdAt: now,
           updatedAt: now,
