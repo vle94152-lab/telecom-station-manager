@@ -766,8 +766,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           const ai = new GoogleGenAI({ apiKey });
 
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
-${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('
-')}
+${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
 
 Hãy kiểm tra xem có trạm nào mà tọa độ (vĩ độ, kinh độ) có vẻ bị sai lệch hoàn toàn so với địa chỉ không.
 Ví dụ:
@@ -1399,7 +1398,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
         return;
       }
       const routeStations = activeIds.map(id => stations.find(s => s.id === id)).filter(Boolean) as Station[];
-      let coordinates = routeStations.map(s => `${s.longitude},${s.latitude}`).join(';');
+      let coordinates = routeStations.map(s => `${s.longitude},${s.latitude}`).join('\n');
       
       if (startCoords) {
         coordinates = `${startCoords[1]},${startCoords[0]};` + coordinates;
@@ -1563,8 +1562,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
       const ai = new GoogleGenAI({ apiKey });
 
       const prompt = `Tôi có danh sách các trạm viễn thông sau:
-${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('
-')}
+${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
 
 Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
 
