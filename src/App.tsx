@@ -1532,7 +1532,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     const now = new Date().toISOString();
     const trimmedContent = reportContent.trim();
     const selectedGroup = WORK_GROUPS.find(group => group.id === reportWorkGroupId);
-    const selectedItem = WORK_ITEMS.find(item => item.id === reportWorkItemId);
+    const selectedItem = WORK_ITEMS.find(item => item.id === reportWorkItemId && item.groupId === reportWorkGroupId);
 
     if (!selectedGroup) {
       alert('Vui lòng chọn nhóm công việc.');
@@ -1540,12 +1540,12 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     }
 
     if (!selectedItem) {
-      alert('Vui lòng chọn nội dung công việc.');
+      alert('Vui lòng chọn nội dung công việc hợp lệ.');
       return;
     }
 
     if (!trimmedContent) {
-      alert('Chi tiết công việc không được để trống.');
+      alert('Nội dung/chi tiết báo cáo không được để trống.');
       return;
     }
 
