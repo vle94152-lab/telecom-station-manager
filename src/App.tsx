@@ -1492,7 +1492,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
-        config: { tools: [{ googleMaps: {} }] }
+       
       });
 
       setOptimizeProgress('Đang hoàn thiện lộ trình...');
