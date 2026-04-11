@@ -465,7 +465,40 @@ function NavButton({ active, onClick, icon, label }: any) {
 }
 
 // --- Tab Components ---
+async function generateWithRetry(
+  ai: GoogleGenAI,
+  prompt: string,
+  model = "gemini-2.5-flash-lite",
+  retries = 3
+) {
+  let lastError: unknown;
 
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+      });
+      return response;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+
+      const isTemporary =
+        msg.includes('"code":503') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('high demand');
+
+      if (!isTemporary || i === retries - 1) {
+        throw err;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
+    }
+  }
+
+  throw lastError;
+}
 function StationsTab({ stations, validationWarnings, setValidationWarnings }: { stations: Station[], validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void }) {
   const [isAdding, setIsAdding] = useState(false);
   const [search, setSearch] = useState('');
@@ -716,52 +749,63 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
       setIsValidating(true);
       let warnings: ValidationWarning[] = [];
       try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (import.meta.env.VITE_GEMINI_API_KEY) {
-         const ai = new GoogleGenAI({ apiKey });
-          const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
-          ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
-          
-          Hãy kiểm tra xem có trạm nào mà tọa độ (vĩ độ, kinh độ) có vẻ bị sai lệch hoàn toàn so với địa chỉ không (ví dụ: địa chỉ ở Hà Nội nhưng tọa độ ở TP.HCM, hoặc tọa độ ngoài biển, ngoài lãnh thổ Việt Nam).
-          Trả về kết quả dưới dạng mảng JSON chứa các object có cấu trúc:
-          [
-            {
-              "name": "Tên trạm",
-              "address": "Địa chỉ",
-              "latitude": 10.0,
-              "longitude": 106.0,
-              "issue": "Mô tả lỗi (ví dụ: Tọa độ nằm ngoài lãnh thổ Việt Nam)",
-              "recommendation": "Khuyến cáo (ví dụ: Kiểm tra lại tọa độ)"
-            }
-          ]
-          Nếu không có trạm nào sai, trả về mảng rỗng []. Chỉ trả về JSON, không giải thích thêm.`;
+        setIsValidating(true);
+let warnings: ValidationWarning[] = [];
 
-          const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: prompt,
-          });
+try {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+if (!apiKey) {
+  throw new Error("Thiếu VITE_GEMINI_API_KEY");
+}
 
-          const rawText =
+const selectedStations = stations.filter(s => selectedStationIds.includes(s.id));
+const ai = new GoogleGenAI({ apiKey });
+
+const prompt = `Tôi có danh sách các trạm viễn thông sau:
+${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
+
+Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
+
+Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát.
+Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy.
+Không giải thích gì thêm.`;
+
+setOptimizeProgress('Đang phân tích tọa độ và tính toán khoảng cách...');
+
+const response = await generateWithRetry(
+  ai,
+  prompt,
+  "gemini-2.5-flash-lite",
+  3
+);
+
+setOptimizeProgress('Đang hoàn thiện lộ trình...');
+
+const rawText =
   typeof response.text === 'function'
     ? await response.text()
-    : (response.text || '[]');
+    : (response.text || '');
 
-const text = rawText.trim();
-          const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-          const parsedWarnings = JSON.parse(jsonStr);
-          warnings = parsedWarnings.map((w: any) => ({
-            ...w,
-            id: Math.random().toString(36).substring(2, 9),
-            isRead: false
-          }));
-        } else {
-          console.warn("VITE_GEMINI_API_KEY is not defined. Skipping AI validation.");
-        }
-      } catch (err) {
-       console.error("AI Validation error:", err);
-alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI: " + (err instanceof Error ? err.message : String(err)));
-      }
-      setIsValidating(false);
+const result = rawText.trim().split(',').map(id => id.trim()).filter(Boolean);
+
+if (result.length === selectedStationIds.length) {
+  setOptimizedRoute(result);
+  setSelectedStationIds(result);
+} else {
+  throw new Error('AI trả về kết quả không hợp lệ: ' + rawText);
+}
+} catch (err) {
+  console.error('Optimization error:', err);
+  const msg = err instanceof Error ? err.message : String(err);
+
+  if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+    setOptimizeError('AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.');
+  } else {
+    setOptimizeError('Không thể tối ưu lộ trình lúc này. Chi tiết: ' + msg);
+  }
+} 
+
+setIsValidating(false);
 
       let successCount = 0;
       let errorCount = 0;
