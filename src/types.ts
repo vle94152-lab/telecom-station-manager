@@ -44,7 +44,7 @@ export interface DailyPlan {
   stationIds: string[];
 }
 
-export type Tab = 'dashboard' | 'stations' | 'planner' | 'settings';
+export type Tab = 'dashboard' | 'stations' | 'planner' | 'reports' | 'settings';
 
 export interface ValidationWarning {
   id: string;
