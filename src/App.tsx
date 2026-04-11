@@ -465,6 +465,7 @@ function NavButton({ active, onClick, icon, label }: any) {
 }
 
 // --- Tab Components ---
+
 async function generateWithRetry(
   ai: GoogleGenAI,
   prompt: string,
@@ -489,7 +490,7 @@ async function generateWithRetry(
         msg.includes('UNAVAILABLE') ||
         msg.includes('high demand');
 
-      if (!isTemporary || i === retries - 1) {
+      if (!isTemporary || i == retries - 1) {
         throw err;
       }
 
@@ -499,6 +500,7 @@ async function generateWithRetry(
 
   throw lastError;
 }
+
 function StationsTab({ stations, validationWarnings, setValidationWarnings }: { stations: Station[], validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void }) {
   const [isAdding, setIsAdding] = useState(false);
   const [search, setSearch] = useState('');
@@ -698,8 +700,10 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
   const processUpload = async () => {
     setIsUploading(true);
     setShowMappingModal(false);
+
     try {
       const validStations: any[] = [];
+
       for (const rawRow of uploadData) {
         let infrastructureCode = rawRow[columnMapping.infrastructureCode] || '';
         let name = rawRow[columnMapping.name];
@@ -710,7 +714,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
         let managerName = rawRow[columnMapping.managerName] || '';
         let managerPhone = rawRow[columnMapping.managerPhone] || '';
         let statusRaw = rawRow[columnMapping.status] || '';
-        
+
         let status: 'checked' | 'unchecked' = 'unchecked';
         if (typeof statusRaw === 'string') {
           const s = statusRaw.toLowerCase();
@@ -725,7 +729,14 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
         const parsedLat = parseFloat(lat);
         const parsedLng = parseFloat(lng);
 
-        if (name && String(name).trim() !== '' && lat !== undefined && lng !== undefined && !isNaN(parsedLat) && !isNaN(parsedLng)) {
+        if (
+          name &&
+          String(name).trim() !== '' &&
+          lat !== undefined &&
+          lng !== undefined &&
+          !isNaN(parsedLat) &&
+          !isNaN(parsedLng)
+        ) {
           validStations.push({
             infrastructureCode: String(infrastructureCode || ''),
             name: String(name).trim(),
@@ -735,81 +746,91 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
             address: String(address || ''),
             managerName: String(managerName || ''),
             managerPhone: String(managerPhone || ''),
-            status: status
+            status,
           });
         }
       }
-      
+
       if (validStations.length === 0) {
         alert('Lỗi: Không tìm thấy dữ liệu hợp lệ. Vui lòng đảm bảo bạn đã chọn đúng cột Tên trạm, Vĩ độ và Kinh độ (Vĩ độ/Kinh độ phải là số).');
-        setIsUploading(false);
         return;
       }
 
       setIsValidating(true);
       let warnings: ValidationWarning[] = [];
+
       try {
-        setIsValidating(true);
-let warnings: ValidationWarning[] = [];
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
-try {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-if (!apiKey) {
-  throw new Error("Thiếu VITE_GEMINI_API_KEY");
-}
+        if (apiKey) {
+          const ai = new GoogleGenAI({ apiKey });
 
-const selectedStations = stations.filter(s => selectedStationIds.includes(s.id));
-const ai = new GoogleGenAI({ apiKey });
+          const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
+${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('
+')}
 
-const prompt = `Tôi có danh sách các trạm viễn thông sau:
-${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
+Hãy kiểm tra xem có trạm nào mà tọa độ (vĩ độ, kinh độ) có vẻ bị sai lệch hoàn toàn so với địa chỉ không.
+Ví dụ:
+- địa chỉ ở Hà Nội nhưng tọa độ ở TP.HCM
+- tọa độ ngoài biển
+- tọa độ ngoài lãnh thổ Việt Nam
 
-Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
-
-Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát.
-Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy.
-Không giải thích gì thêm.`;
-
-setOptimizeProgress('Đang phân tích tọa độ và tính toán khoảng cách...');
-
-const response = await generateWithRetry(
-  ai,
-  prompt,
-  "gemini-2.5-flash-lite",
-  3
-);
-
-setOptimizeProgress('Đang hoàn thiện lộ trình...');
-
-const rawText =
-  typeof response.text === 'function'
-    ? await response.text()
-    : (response.text || '');
-
-const result = rawText.trim().split(',').map(id => id.trim()).filter(Boolean);
-
-if (result.length === selectedStationIds.length) {
-  setOptimizedRoute(result);
-  setSelectedStationIds(result);
-} else {
-  throw new Error('AI trả về kết quả không hợp lệ: ' + rawText);
-}
-} catch (err) {
-  console.error('Optimization error:', err);
-  const msg = err instanceof Error ? err.message : String(err);
-
-  if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
-    setOptimizeError('AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.');
-  } else {
-    setOptimizeError('Không thể tối ưu lộ trình lúc này. Chi tiết: ' + msg);
+Trả về kết quả dưới dạng mảng JSON:
+[
+  {
+    "name": "Tên trạm",
+    "address": "Địa chỉ",
+    "latitude": 10.0,
+    "longitude": 106.0,
+    "issue": "Mô tả lỗi",
+    "recommendation": "Khuyến cáo"
   }
-} 
+]
 
-setIsValidating(false);
+Nếu không có trạm nào sai, trả về [].
+Chỉ trả về JSON, không giải thích thêm.`;
+
+          const response = await generateWithRetry(
+            ai,
+            prompt,
+            "gemini-2.5-flash-lite",
+            3
+          );
+
+          const rawText =
+            typeof response.text === 'function'
+              ? await response.text()
+              : (response.text || '[]');
+
+          const text = rawText.trim();
+          const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsedWarnings = JSON.parse(jsonStr);
+
+          warnings = parsedWarnings.map((w: any) => ({
+            ...w,
+            id: Math.random().toString(36).substring(2, 9),
+            isRead: false,
+          }));
+        } else {
+          console.warn("VITE_GEMINI_API_KEY is not defined. Skipping AI validation.");
+        }
+      } catch (err) {
+        console.error("AI Validation error:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+
+        if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+          alert("AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.");
+        } else {
+          alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI: " + msg);
+        }
+      } finally {
+        setIsValidating(false);
+      }
 
       let successCount = 0;
       let errorCount = 0;
-      let errorDetails: string[] = [];
+      const errorDetails: string[] = [];
+
       for (const station of validStations) {
         try {
           await addDoc(collection(db, 'stations'), station);
@@ -830,9 +851,13 @@ setIsValidating(false);
       } else {
         alert(`Đã nhập thành công ${successCount} trạm!`);
       }
-      
+
       if (errorCount > 0) {
-        alert(`Có ${errorCount} trạm bị lỗi khi lưu vào cơ sở dữ liệu.\nChi tiết lỗi (tối đa 5):\n${errorDetails.join('\n')}\n\nVui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.`);
+        alert(`Có ${errorCount} trạm bị lỗi khi lưu vào cơ sở dữ liệu.
+Chi tiết lỗi (tối đa 5):
+${errorDetails.join('\n')}
+
+Vui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.`);
       }
     } catch (err: any) {
       console.error(err);
@@ -1522,46 +1547,68 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
 
   const executeOptimizeRoute = async () => {
     if (selectedStationIds.length < 2) return;
+
     setShowOptimizeModal(false);
     setIsOptimizing(true);
     setOptimizeError(null);
     setOptimizeProgress('Khởi tạo AI...');
-    
+
     try {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('Thiếu VITE_GEMINI_API_KEY');
+      }
+
       const selectedStations = stations.filter(s => selectedStationIds.includes(s.id));
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-      
+      const ai = new GoogleGenAI({ apiKey });
+
       const prompt = `Tôi có danh sách các trạm viễn thông sau:
-      ${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
-      
-      Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
-      
-      Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát. 
-      Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy. Không giải thích gì thêm.`;
+${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('
+')}
+
+Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
+
+Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát.
+Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy.
+Không giải thích gì thêm.`;
 
       setOptimizeProgress('Đang phân tích tọa độ và tính toán khoảng cách...');
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-       
-      });
+
+      const response = await generateWithRetry(
+        ai,
+        prompt,
+        "gemini-2.5-flash-lite",
+        3
+      );
 
       setOptimizeProgress('Đang hoàn thiện lộ trình...');
-      const rawText =
-  typeof response.text === 'function'
-    ? await response.text()
-    : (response.text || '');
 
-const result = rawText.trim().split(',').map(id => id.trim());
-      if (result && result.length === selectedStationIds.length) {
+      const rawText =
+        typeof response.text === 'function'
+          ? await response.text()
+          : (response.text || '');
+
+      const result = rawText
+        .trim()
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+
+      if (result.length === selectedStationIds.length) {
         setOptimizedRoute(result);
         setSelectedStationIds(result);
       } else {
-        throw new Error('AI trả về kết quả không hợp lệ.');
+        throw new Error('AI trả về kết quả không hợp lệ: ' + rawText);
       }
     } catch (err) {
       console.error('Optimization error:', err);
-      setOptimizeError('Không thể tối ưu lộ trình lúc này. Vui lòng thử lại sau.');
+      const msg = err instanceof Error ? err.message : String(err);
+
+      if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+        setOptimizeError('AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.');
+      } else {
+        setOptimizeError('Không thể tối ưu lộ trình lúc này. Chi tiết: ' + msg);
+      }
     } finally {
       setIsOptimizing(false);
       setOptimizeProgress('');
