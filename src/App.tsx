@@ -716,8 +716,8 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
       setIsValidating(true);
       let warnings: ValidationWarning[] = [];
       try {
-        if (process.env.GEMINI_API_KEY) {
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        if (import.meta.env.VITE_GEMINI_API_KEY) {
+          const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
           ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
           
@@ -1478,7 +1478,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     
     try {
       const selectedStations = stations.filter(s => selectedStationIds.includes(s.id));
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
       
       const prompt = `Tôi có danh sách các trạm viễn thông sau:
       ${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
