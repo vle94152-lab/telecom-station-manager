@@ -26,6 +26,11 @@ export interface Report {
   stationName?: string; // Denormalized for easier display
   date: string; // YYYY-MM-DD
   content: string;
+  workGroupId?: string;
+  workGroupName?: string;
+  workItemId?: string;
+  workItemName?: string;
+  workDetail?: string;
   status: 'completed' | 'pending';
   createdAt?: string;
   updatedAt?: string;

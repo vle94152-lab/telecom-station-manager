@@ -161,6 +161,32 @@ const uncheckedIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
+
+const formatHistoryTimestamp = (timestamp: unknown) => {
+  try {
+    if (!timestamp) return 'Không rõ thời gian';
+
+    if (typeof timestamp === 'string') {
+      return format(parseISO(timestamp), 'dd/MM/yyyy HH:mm');
+    }
+
+    if (timestamp instanceof Date) {
+      return format(timestamp, 'dd/MM/yyyy HH:mm');
+    }
+
+    if (typeof timestamp === 'object' && timestamp !== null && 'toDate' in (timestamp as Record<string, unknown>)) {
+      const toDate = (timestamp as { toDate?: () => Date }).toDate;
+      if (typeof toDate === 'function') {
+        return format(toDate(), 'dd/MM/yyyy HH:mm');
+      }
+    }
+  } catch (error) {
+    console.warn('Cannot parse history timestamp', error);
+  }
+
+  return 'Không rõ thời gian';
+};
+
 const formatStationName = (name: string) => {
   if (!name) return '';
   const parts = name.split(/[-_]/);
@@ -643,17 +669,10 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           reader.readAsArrayBuffer(file);
         });
         
-        const read = XLSX.read || (XLSX as any).default?.read;
-        const utils = XLSX.utils || (XLSX as any).default?.utils;
-        
-        if (!read || !utils) {
-          throw new Error('Thư viện đọc Excel (XLSX) không khả dụng.');
-        }
-        
-        const workbook = read(arrayBuffer, { type: 'array' });
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        data = utils.sheet_to_json(worksheet);
+        data = XLSX.utils.sheet_to_json(worksheet);
       } else {
         throw new Error('Định dạng file không được hỗ trợ. Vui lòng tải lên file .csv, .txt, .xlsx, hoặc .xls');
       }
@@ -1345,6 +1364,49 @@ Vui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.
   );
 }
 
+
+const DEFAULT_WORK_GROUPS = [
+  { id: 'maintenance', name: 'Bảo trì' },
+  { id: 'inspection', name: 'Đo kiểm' },
+  { id: 'repair', name: 'Sửa chữa' },
+  { id: 'power', name: 'Nguồn điện' },
+];
+
+const DEFAULT_WORK_ITEMS = [
+  { id: 'maintenance_cleaning', groupId: 'maintenance', name: 'Vệ sinh thiết bị' },
+  { id: 'maintenance_cable', groupId: 'maintenance', name: 'Kiểm tra cáp nối' },
+  { id: 'inspection_signal', groupId: 'inspection', name: 'Đo kiểm tín hiệu' },
+  { id: 'inspection_ping', groupId: 'inspection', name: 'Kiểm tra kết nối mạng' },
+  { id: 'repair_module', groupId: 'repair', name: 'Thay thế module lỗi' },
+  { id: 'repair_hardware', groupId: 'repair', name: 'Khắc phục lỗi phần cứng' },
+  { id: 'power_battery', groupId: 'power', name: 'Kiểm tra pin dự phòng' },
+  { id: 'power_ups', groupId: 'power', name: 'Kiểm tra UPS / nguồn' },
+];
+
+const loadConfiguredWorkGroups = () => {
+  try {
+    const raw = localStorage.getItem('work_groups_config');
+    if (!raw) return DEFAULT_WORK_GROUPS;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every(item => item?.id && item?.name)) return parsed;
+  } catch (error) {
+    console.warn('Invalid work_groups_config', error);
+  }
+  return DEFAULT_WORK_GROUPS;
+};
+
+const loadConfiguredWorkItems = () => {
+  try {
+    const raw = localStorage.getItem('work_items_config');
+    if (!raw) return DEFAULT_WORK_ITEMS;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every(item => item?.id && item?.groupId && item?.name)) return parsed;
+  } catch (error) {
+    console.warn('Invalid work_items_config', error);
+  }
+  return DEFAULT_WORK_ITEMS;
+};
+
 function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station[], dailyPlans: DailyPlan[], user: User, reports: Report[] }) {
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedStationIds, setSelectedStationIds] = useState<string[]>([]);
@@ -1359,6 +1421,8 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
   const [reportModalStation, setReportModalStation] = useState<Station | null>(null);
   const [reportContent, setReportContent] = useState('');
   const [confirmSaveReport, setConfirmSaveReport] = useState(false);
+  const [workGroups, setWorkGroups] = useState(() => loadConfiguredWorkGroups());
+  const [workItems, setWorkItems] = useState(() => loadConfiguredWorkItems());
   
   const [showOptimizeModal, setShowOptimizeModal] = useState(false);
   const [startLocation, setStartLocation] = useState('');
@@ -1394,6 +1458,15 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
       setRouteGeometry(null);
     }
   }, [selectedDate, currentPlan]);
+
+  useEffect(() => {
+    const refreshConfig = () => {
+      setWorkGroups(loadConfiguredWorkGroups());
+      setWorkItems(loadConfiguredWorkItems());
+    };
+    window.addEventListener('work-config-updated', refreshConfig);
+    return () => window.removeEventListener('work-config-updated', refreshConfig);
+  }, []);
 
   useEffect(() => {
     const fetchRouteGeometry = async () => {
@@ -1480,7 +1553,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
 
   const openReportModal = (station: Station) => {
     const existing = reports.find(r => r.stationId === station.id && r.date === selectedDate);
-    setReportContent(existing?.content || '');
+    setReportContent(existing?.workDetail || existing?.content || '');
     setReportModalStation(station);
   };
 
@@ -1488,35 +1561,56 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     if (!reportModalStation) return;
     const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
     const now = new Date().toISOString();
-    
+    const trimmedContent = reportContent.trim();
+    if (!trimmedContent) {
+      alert('Nội dung/chi tiết báo cáo không được để trống.');
+      return;
+    }
+
     try {
       if (existing) {
-        const historyEntry = {
-          userId: user.uid,
-          userName: user.email || 'Unknown',
-          timestamp: now,
-          content: existing.content || ''
-        };
-        await updateDoc(doc(db, 'reports', existing.id), {
-          content: reportContent,
+        const updatePayload: Record<string, unknown> = {
+          content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: existing.workGroupId || undefined,
+          workGroupName: existing.workGroupName || undefined,
+          workItemId: existing.workItemId || undefined,
+          workItemName: existing.workItemName || undefined,
           updatedAt: now,
-          history: arrayUnion(historyEntry)
-        });
+        };
+
+        if ((existing.content || '').trim() !== trimmedContent) {
+          updatePayload.history = arrayUnion({
+            userId: user.uid,
+            userName: user.email || 'Unknown',
+            timestamp: now,
+            content: existing.content || ''
+          });
+        }
+
+        await updateDoc(doc(db, 'reports', existing.id), updatePayload);
       } else {
         await addDoc(collection(db, 'reports'), {
           stationId: reportModalStation.id,
           stationName: reportModalStation.name,
           userId: user.uid,
           date: selectedDate,
-          content: reportContent,
+          content: trimmedContent,
+          workDetail: trimmedContent,
+          workGroupId: undefined,
+          workGroupName: undefined,
+          workItemId: undefined,
+          workItemName: undefined,
           status: 'completed',
           createdAt: now,
           updatedAt: now,
           history: []
         });
-        await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       }
+
+      await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       setReportModalStation(null);
+      setReportContent('');
       alert('Đã cập nhật báo cáo công việc!');
     } catch (err) {
       console.error(err);
@@ -1794,6 +1888,7 @@ Không giải thích gì thêm.`;
               const isSaved = currentPlan?.stationIds.includes(sid);
               const existingReport = reports.find(r => r.stationId === sid && r.date === selectedDate);
               const isCompleted = !!existingReport;
+              const processingStatus = isCompleted ? 'Đã xử lý' : 'Chờ xử lý';
 
               return (
                 <div key={sid} className="flex items-center gap-3">
@@ -1810,6 +1905,15 @@ Không giải thích gì thêm.`;
                       <div className="font-bold text-gray-900 leading-tight">{station.name}</div>
                       <div className="text-xs text-gray-500 mt-1.5">{station.managerName || 'Chưa có QL'}</div>
                       <div className="text-xs text-gray-500">{station.managerPhone || 'Chưa có SĐT'}</div>
+                      <div className={cn("inline-flex mt-2 text-[11px] px-2 py-1 rounded-full font-medium", isCompleted ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>
+                        {processingStatus}
+                      </div>
+                      {existingReport?.workGroupName && (
+                        <div className="text-xs text-gray-600 mt-1">Nhóm việc: <span className="font-medium text-gray-800">{existingReport.workGroupName}</span></div>
+                      )}
+                      {existingReport?.workItemName && (
+                        <div className="text-xs text-gray-600">Nội dung: <span className="font-medium text-gray-800">{existingReport.workItemName}</span></div>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-1.5 shrink-0">
                       <a 
@@ -1907,7 +2011,7 @@ Không giải thích gì thêm.`;
             >
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-900">Cập nhật công việc</h3>
-                <button onClick={() => setReportModalStation(null)} className="text-gray-400 hover:text-gray-600">
+                <button onClick={() => { setReportModalStation(null); setReportContent(''); }} className="text-gray-400 hover:text-gray-600">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -1918,8 +2022,19 @@ Không giải thích gì thêm.`;
                   <p className="font-bold text-gray-900">{reportModalStation.name}</p>
                 </div>
                 
+                {(() => {
+                  const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
+                  if (!existing?.workGroupName && !existing?.workItemName) return null;
+                  return (
+                    <div className="mb-4 grid grid-cols-1 gap-2">
+                      <div className="text-xs text-gray-500">Nhóm công việc: <span className="font-medium text-gray-700">{existing?.workGroupName || 'Chưa cấu hình'}</span></div>
+                      <div className="text-xs text-gray-500">Nội dung công việc: <span className="font-medium text-gray-700">{existing?.workItemName || 'Chưa cấu hình'}</span></div>
+                    </div>
+                  );
+                })()}
+
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung công việc đã thực hiện</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Chi tiết công việc</label>
                   <textarea
                     className="w-full border border-gray-300 rounded-lg p-3 min-h-[120px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                     placeholder="Nhập chi tiết công việc, tình trạng thiết bị..."
@@ -1936,7 +2051,7 @@ Không giải thích gì thêm.`;
                         <div key={i} className="bg-gray-50 p-3 rounded-lg text-sm">
                           <div className="flex justify-between text-xs text-gray-500 mb-1">
                             <span className="font-medium text-gray-700">{h.userName}</span>
-                            <span>{format(parseISO(h.timestamp), 'dd/MM/yyyy HH:mm')}</span>
+                            <span>{formatHistoryTimestamp(h.timestamp)}</span>
                           </div>
                           <p className="text-gray-600 whitespace-pre-wrap">{h.content}</p>
                         </div>
@@ -1947,7 +2062,7 @@ Không giải thích gì thêm.`;
               </div>
               
               <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
-                <Button variant="secondary" className="flex-1" onClick={() => setReportModalStation(null)}>
+                <Button variant="secondary" className="flex-1" onClick={() => { setReportModalStation(null); setReportContent(''); }}>
                   Hủy
                 </Button>
                 <Button className="flex-1" onClick={() => setConfirmSaveReport(true)} disabled={!reportContent.trim()}>
@@ -2083,6 +2198,34 @@ Không giải thích gì thêm.`;
 }
 
 function SettingsTab({ user, logout }: { user: User, logout: () => void }) {
+  const [groupsConfig, setGroupsConfig] = useState(() => JSON.stringify(loadConfiguredWorkGroups(), null, 2));
+  const [itemsConfig, setItemsConfig] = useState(() => JSON.stringify(loadConfiguredWorkItems(), null, 2));
+
+  const handleSaveWorkConfig = () => {
+    try {
+      const parsedGroups = JSON.parse(groupsConfig);
+      const parsedItems = JSON.parse(itemsConfig);
+
+      if (!Array.isArray(parsedGroups) || parsedGroups.some(item => !item?.id || !item?.name)) {
+        alert('Cấu hình nhóm công việc không hợp lệ. Mỗi phần tử cần có id và name.');
+        return;
+      }
+
+      if (!Array.isArray(parsedItems) || parsedItems.some(item => !item?.id || !item?.groupId || !item?.name)) {
+        alert('Cấu hình nội dung công việc không hợp lệ. Mỗi phần tử cần có id, groupId và name.');
+        return;
+      }
+
+      localStorage.setItem('work_groups_config', JSON.stringify(parsedGroups));
+      localStorage.setItem('work_items_config', JSON.stringify(parsedItems));
+      window.dispatchEvent(new Event('work-config-updated'));
+      alert('Đã lưu cấu hình nhóm việc / nội dung việc.');
+    } catch (error) {
+      console.error(error);
+      alert('JSON cấu hình không hợp lệ.');
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }} 
@@ -2108,6 +2251,30 @@ function SettingsTab({ user, logout }: { user: User, logout: () => void }) {
           </div>
         </div>
         <div className="space-y-4">
+          <div className="space-y-3 border rounded-xl p-4 bg-gray-50">
+            <h4 className="font-semibold text-gray-900">Cấu hình nhóm công việc / nội dung công việc</h4>
+            <p className="text-xs text-gray-500">
+              Dữ liệu được cấu hình bởi người dùng (lưu trên trình duyệt hiện tại).
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Nhóm công việc (JSON)</label>
+              <textarea
+                value={groupsConfig}
+                onChange={(e) => setGroupsConfig(e.target.value)}
+                className="w-full min-h-[140px] rounded-lg border border-gray-300 p-3 text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Nội dung công việc (JSON)</label>
+              <textarea
+                value={itemsConfig}
+                onChange={(e) => setItemsConfig(e.target.value)}
+                className="w-full min-h-[180px] rounded-lg border border-gray-300 p-3 text-xs font-mono"
+              />
+            </div>
+            <Button onClick={handleSaveWorkConfig} className="w-full">Lưu cấu hình công việc</Button>
+          </div>
+
           <Button onClick={logout} variant="danger" className="w-full">
             <LogOut className="w-5 h-5" /> Đăng xuất
           </Button>
@@ -2508,5 +2675,3 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
     </motion.div>
   );
 }
-
-
