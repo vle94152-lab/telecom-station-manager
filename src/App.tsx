@@ -768,25 +768,30 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
 ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
 
-Nhiệm vụ:
-Chỉ phát hiện các trạm có tọa độ sai lệch lớn so với địa chỉ thực tế.
+Hãy chỉ kiểm tra các trạm có tọa độ lệch rất nhiều so với địa chỉ thực tế.
 
-Chỉ cảnh báo nếu:
-- Tọa độ nằm ở tỉnh/thành khác rất xa so với địa chỉ
+Chỉ cảnh báo khi:
+- Địa chỉ ở tỉnh/thành này nhưng tọa độ nằm sang tỉnh/thành khác rất xa
 - Tọa độ nằm ngoài biển
 - Tọa độ nằm ngoài lãnh thổ Việt Nam
-- Sai lệch lớn trên 20 km
+- Sai lệch lớn trên 20km so với vị trí hợp lý của địa chỉ
 
-Trả về kết quả dưới dạng mảng JSON:
+Không cảnh báo các sai lệch nhỏ.
+
+Trả về JSON dạng:
 [
   {
     "name": "Tên trạm",
-    "issue": "Mô tả lỗi",
-    "recommendation": "Khuyến cáo"
+    "address": "Địa chỉ",
+    "latitude": 10.0,
+    "longitude": 106.0,
+    "issue": "Tọa độ lệch xa so với địa chỉ",
+    "recommendation": "Kiểm tra lại tọa độ vì sai lệch lớn"
   }
 ]
 
-Nếu không có trạm nào sai, trả về [].
+Nếu không có trạm nào sai lệch lớn thì trả về [].
+
 Chỉ trả về JSON, không giải thích thêm.`;
 
           const response = await generateWithRetry(
