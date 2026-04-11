@@ -26,11 +26,6 @@ export interface Report {
   stationName?: string; // Denormalized for easier display
   date: string; // YYYY-MM-DD
   content: string;
-  workGroupId?: string;
-  workGroupName?: string;
-  workItemId?: string;
-  workItemName?: string;
-  workDetail?: string;
   status: 'completed' | 'pending';
   createdAt?: string;
   updatedAt?: string;
@@ -44,7 +39,7 @@ export interface DailyPlan {
   stationIds: string[];
 }
 
-export type Tab = 'dashboard' | 'stations' | 'planner' | 'reports' | 'settings';
+export type Tab = 'dashboard' | 'stations' | 'planner' | 'settings';
 
 export interface ValidationWarning {
   id: string;
