@@ -716,6 +716,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
       setIsValidating(true);
       let warnings: ValidationWarning[] = [];
       try {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         if (import.meta.env.VITE_GEMINI_API_KEY) {
          const ai = new GoogleGenAI({ apiKey });
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
@@ -754,10 +755,11 @@ const text = rawText.trim();
             isRead: false
           }));
         } else {
-          console.warn("GEMINI_API_KEY is not defined. Skipping AI validation.");
+          console.warn("VITE_GEMINI_API_KEY is not defined. Skipping AI validation.");
         }
       } catch (err) {
         console.error("AI Validation error:", err);
+alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI");
       }
       setIsValidating(false);
 
