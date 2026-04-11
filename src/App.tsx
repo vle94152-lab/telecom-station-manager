@@ -386,7 +386,6 @@ export default function App() {
         {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
         {activeTab === 'stations' && <StationsTab key="stations" stations={stations} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
         {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} />}
-        {activeTab === 'reports' && <ReportsTab key="reports" reports={reports} stations={stations} user={user} />}
         {activeTab === 'settings' && <SettingsTab key="settings" user={user} logout={logout} />}
       </main>
 
@@ -409,15 +408,8 @@ export default function App() {
           {/* Floating Action Button */}
           <div className="relative -top-8 flex justify-center w-16">
             <div className="absolute w-20 h-20 bg-white rounded-full -top-2 flex items-center justify-center shadow-[0_-10px_20px_-5px_rgba(0,0,0,0.05)]">
-              <button 
-                onClick={() => setActiveTab('reports')}
-                className={cn(
-                  "w-16 h-16 rounded-full flex items-center justify-center text-white shadow-lg transition-colors",
-                  activeTab === 'reports' ? "bg-blue-600 hover:bg-blue-700" : "bg-[#b90000] hover:bg-red-800"
-                )}
-                aria-label="Mở báo cáo"
-              >
-                <FileText className="w-7 h-7" />
+              <button className="w-16 h-16 bg-[#b90000] rounded-full flex items-center justify-center text-white shadow-lg hover:bg-red-800 transition-colors">
+                <span className="text-4xl font-light leading-none mb-1">+</span>
               </button>
             </div>
           </div>
@@ -473,41 +465,6 @@ function NavButton({ active, onClick, icon, label }: any) {
 }
 
 // --- Tab Components ---
-
-async function generateWithRetry(
-  ai: GoogleGenAI,
-  prompt: string,
-  model = "gemini-2.5-flash",
-  retries = 3
-) {
-  let lastError: unknown;
-
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-      });
-      return response;
-    } catch (err) {
-      lastError = err;
-      const msg = err instanceof Error ? err.message : String(err);
-
-      const isTemporary =
-        msg.includes('"code":503') ||
-        msg.includes('UNAVAILABLE') ||
-        msg.includes('high demand');
-
-      if (!isTemporary || i == retries - 1) {
-        throw err;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
-    }
-  }
-
-  throw lastError;
-}
 
 function StationsTab({ stations, validationWarnings, setValidationWarnings }: { stations: Station[], validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void }) {
   const [isAdding, setIsAdding] = useState(false);
@@ -651,10 +608,17 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           reader.readAsArrayBuffer(file);
         });
         
-        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const read = XLSX.read || (XLSX as any).default?.read;
+        const utils = XLSX.utils || (XLSX as any).default?.utils;
+        
+        if (!read || !utils) {
+          throw new Error('Thư viện đọc Excel (XLSX) không khả dụng.');
+        }
+        
+        const workbook = read(arrayBuffer, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        data = XLSX.utils.sheet_to_json(worksheet);
+        data = utils.sheet_to_json(worksheet);
       } else {
         throw new Error('Định dạng file không được hỗ trợ. Vui lòng tải lên file .csv, .txt, .xlsx, hoặc .xls');
       }
@@ -701,10 +665,8 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
   const processUpload = async () => {
     setIsUploading(true);
     setShowMappingModal(false);
-
     try {
       const validStations: any[] = [];
-
       for (const rawRow of uploadData) {
         let infrastructureCode = rawRow[columnMapping.infrastructureCode] || '';
         let name = rawRow[columnMapping.name];
@@ -715,7 +677,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
         let managerName = rawRow[columnMapping.managerName] || '';
         let managerPhone = rawRow[columnMapping.managerPhone] || '';
         let statusRaw = rawRow[columnMapping.status] || '';
-
+        
         let status: 'checked' | 'unchecked' = 'unchecked';
         if (typeof statusRaw === 'string') {
           const s = statusRaw.toLowerCase();
@@ -730,14 +692,7 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
         const parsedLat = parseFloat(lat);
         const parsedLng = parseFloat(lng);
 
-        if (
-          name &&
-          String(name).trim() !== '' &&
-          lat !== undefined &&
-          lng !== undefined &&
-          !isNaN(parsedLat) &&
-          !isNaN(parsedLng)
-        ) {
+        if (name && String(name).trim() !== '' && lat !== undefined && lng !== undefined && !isNaN(parsedLat) && !isNaN(parsedLng)) {
           validStations.push({
             infrastructureCode: String(infrastructureCode || ''),
             name: String(name).trim(),
@@ -747,95 +702,63 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
             address: String(address || ''),
             managerName: String(managerName || ''),
             managerPhone: String(managerPhone || ''),
-            status,
+            status: status
           });
         }
       }
-
+      
       if (validStations.length === 0) {
         alert('Lỗi: Không tìm thấy dữ liệu hợp lệ. Vui lòng đảm bảo bạn đã chọn đúng cột Tên trạm, Vĩ độ và Kinh độ (Vĩ độ/Kinh độ phải là số).');
+        setIsUploading(false);
         return;
       }
 
       setIsValidating(true);
       let warnings: ValidationWarning[] = [];
-
       try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-
-        if (apiKey) {
-          const ai = new GoogleGenAI({ apiKey });
-
+        if (process.env.GEMINI_API_KEY) {
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
-${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
+          ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
+          
+          Hãy kiểm tra xem có trạm nào mà tọa độ (vĩ độ, kinh độ) có vẻ bị sai lệch hoàn toàn so với địa chỉ không (ví dụ: địa chỉ ở Hà Nội nhưng tọa độ ở TP.HCM, hoặc tọa độ ngoài biển, ngoài lãnh thổ Việt Nam).
+          Trả về kết quả dưới dạng mảng JSON chứa các object có cấu trúc:
+          [
+            {
+              "name": "Tên trạm",
+              "address": "Địa chỉ",
+              "latitude": 10.0,
+              "longitude": 106.0,
+              "issue": "Mô tả lỗi (ví dụ: Tọa độ nằm ngoài lãnh thổ Việt Nam)",
+              "recommendation": "Khuyến cáo (ví dụ: Kiểm tra lại tọa độ)"
+            }
+          ]
+          Nếu không có trạm nào sai, trả về mảng rỗng []. Chỉ trả về JSON, không giải thích thêm.`;
 
-Hãy chỉ kiểm tra các trạm có tọa độ lệch rất nhiều so với địa chỉ thực tế.
+          const response = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: prompt,
+          });
 
-Chỉ cảnh báo khi:
-- Địa chỉ ở tỉnh/thành này nhưng tọa độ nằm sang tỉnh/thành khác rất xa
-- Tọa độ nằm ngoài biển
-- Tọa độ nằm ngoài lãnh thổ Việt Nam
-- Sai lệch lớn trên 20km so với vị trí hợp lý của địa chỉ
-
-Không cảnh báo các sai lệch nhỏ.
-
-Trả về JSON dạng:
-[
-  {
-    "name": "Tên trạm",
-    "address": "Địa chỉ",
-    "latitude": 10.0,
-    "longitude": 106.0,
-    "issue": "Tọa độ lệch xa so với địa chỉ",
-    "recommendation": "Kiểm tra lại tọa độ vì sai lệch lớn"
-  }
-]
-
-Nếu không có trạm nào sai lệch lớn thì trả về [].
-
-Chỉ trả về JSON, không giải thích thêm.`;
-
-          const response = await generateWithRetry(
-            ai,
-            prompt,
-            "gemini-2.5-flash",
-            3
-          );
-
-          const rawText =
-            typeof response.text === 'function'
-              ? await response.text()
-              : (response.text || '[]');
-
-          const text = rawText.trim();
+          const text = response.text?.trim() || '[]';
           const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
           const parsedWarnings = JSON.parse(jsonStr);
-
           warnings = parsedWarnings.map((w: any) => ({
             ...w,
             id: Math.random().toString(36).substring(2, 9),
-            isRead: false,
+            isRead: false
           }));
         } else {
-          console.warn("VITE_GEMINI_API_KEY is not defined. Skipping AI validation.");
+          console.warn("GEMINI_API_KEY is not defined. Skipping AI validation.");
         }
       } catch (err) {
         console.error("AI Validation error:", err);
-        const msg = err instanceof Error ? err.message : String(err);
-
-        if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
-          alert("AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.");
-        } else {
-          alert("Lỗi kiểm tra địa chỉ/tọa độ bằng AI: " + msg);
-        }
-      } finally {
-        setIsValidating(false);
       }
+      setIsValidating(false);
 
       let successCount = 0;
       let errorCount = 0;
-      const errorDetails: string[] = [];
-
+      let errorDetails: string[] = [];
       for (const station of validStations) {
         try {
           await addDoc(collection(db, 'stations'), station);
@@ -856,13 +779,9 @@ Chỉ trả về JSON, không giải thích thêm.`;
       } else {
         alert(`Đã nhập thành công ${successCount} trạm!`);
       }
-
+      
       if (errorCount > 0) {
-        alert(`Có ${errorCount} trạm bị lỗi khi lưu vào cơ sở dữ liệu.
-Chi tiết lỗi (tối đa 5):
-${errorDetails.join('\n')}
-
-Vui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.`);
+        alert(`Có ${errorCount} trạm bị lỗi khi lưu vào cơ sở dữ liệu.\nChi tiết lỗi (tối đa 5):\n${errorDetails.join('\n')}\n\nVui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.`);
       }
     } catch (err: any) {
       console.error(err);
@@ -1404,7 +1323,7 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
         return;
       }
       const routeStations = activeIds.map(id => stations.find(s => s.id === id)).filter(Boolean) as Station[];
-      let coordinates = routeStations.map(s => `${s.longitude},${s.latitude}`).join('\n');
+      let coordinates = routeStations.map(s => `${s.longitude},${s.latitude}`).join(';');
       
       if (startCoords) {
         coordinates = `${startCoords[1]},${startCoords[0]};` + coordinates;
@@ -1489,45 +1408,34 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     if (!reportModalStation) return;
     const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
     const now = new Date().toISOString();
-    const trimmedContent = reportContent.trim();
-
-    if (!trimmedContent) {
-      alert('Nội dung báo cáo không được để trống.');
-      return;
-    }
-
+    
     try {
       if (existing) {
-        const updatePayload: Record<string, unknown> = {
-          content: trimmedContent,
-          updatedAt: now,
+        const historyEntry = {
+          userId: user.uid,
+          userName: user.email || 'Unknown',
+          timestamp: now,
+          content: existing.content || ''
         };
-
-        if ((existing.content || '').trim() !== trimmedContent) {
-          updatePayload.history = arrayUnion({
-            userId: user.uid,
-            userName: user.email || 'Unknown',
-            timestamp: now,
-            content: existing.content || ''
-          });
-        }
-
-        await updateDoc(doc(db, 'reports', existing.id), updatePayload);
+        await updateDoc(doc(db, 'reports', existing.id), {
+          content: reportContent,
+          updatedAt: now,
+          history: arrayUnion(historyEntry)
+        });
       } else {
         await addDoc(collection(db, 'reports'), {
           stationId: reportModalStation.id,
           stationName: reportModalStation.name,
           userId: user.uid,
           date: selectedDate,
-          content: trimmedContent,
+          content: reportContent,
           status: 'completed',
           createdAt: now,
           updatedAt: now,
           history: []
         });
+        await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       }
-
-      await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       setReportModalStation(null);
       alert('Đã cập nhật báo cáo công việc!');
     } catch (err) {
@@ -1563,67 +1471,41 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
 
   const executeOptimizeRoute = async () => {
     if (selectedStationIds.length < 2) return;
-
     setShowOptimizeModal(false);
     setIsOptimizing(true);
     setOptimizeError(null);
     setOptimizeProgress('Khởi tạo AI...');
-
+    
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('Thiếu VITE_GEMINI_API_KEY');
-      }
-
       const selectedStations = stations.filter(s => selectedStationIds.includes(s.id));
-      const ai = new GoogleGenAI({ apiKey });
-
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
       const prompt = `Tôi có danh sách các trạm viễn thông sau:
-${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
-
-Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
-
-Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát.
-Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy.
-Không giải thích gì thêm.`;
+      ${selectedStations.map(s => `- ID: ${s.id}, Tên: ${s.name}, Tọa độ: ${s.latitude}, ${s.longitude}`).join('\n')}
+      
+      Vị trí xuất phát của tôi là: ${startLocation || 'Không xác định, hãy tự chọn điểm bắt đầu phù hợp nhất từ danh sách trạm'}.
+      
+      Hãy sắp xếp thứ tự các trạm này để tạo thành một lộ trình tối ưu nhất (ngắn nhất) bắt đầu từ vị trí xuất phát. 
+      Chỉ trả về danh sách các ID trạm theo đúng thứ tự, cách nhau bởi dấu phẩy. Không giải thích gì thêm.`;
 
       setOptimizeProgress('Đang phân tích tọa độ và tính toán khoảng cách...');
-
-      const response = await generateWithRetry(
-        ai,
-        prompt,
-        "gemini-2.5-flash",
-        3
-      );
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: { tools: [{ googleMaps: {} }] }
+      });
 
       setOptimizeProgress('Đang hoàn thiện lộ trình...');
-
-      const rawText =
-        typeof response.text === 'function'
-          ? await response.text()
-          : (response.text || '');
-
-      const result = rawText
-        .trim()
-        .split(',')
-        .map(id => id.trim())
-        .filter(Boolean);
-
-      if (result.length === selectedStationIds.length) {
+      const result = response.text?.trim().split(',').map(id => id.trim());
+      if (result && result.length === selectedStationIds.length) {
         setOptimizedRoute(result);
         setSelectedStationIds(result);
       } else {
-        throw new Error('AI trả về kết quả không hợp lệ: ' + rawText);
+        throw new Error('AI trả về kết quả không hợp lệ.');
       }
     } catch (err) {
       console.error('Optimization error:', err);
-      const msg = err instanceof Error ? err.message : String(err);
-
-      if (msg.includes('"code":503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
-        setOptimizeError('AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.');
-      } else {
-        setOptimizeError('Không thể tối ưu lộ trình lúc này. Chi tiết: ' + msg);
-      }
+      setOptimizeError('Không thể tối ưu lộ trình lúc này. Vui lòng thử lại sau.');
     } finally {
       setIsOptimizing(false);
       setOptimizeProgress('');
@@ -2094,192 +1976,6 @@ Không giải thích gì thêm.`;
   );
 }
 
-function ReportsTab({ reports, stations, user }: { reports: Report[], stations: Station[], user: User }) {
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'pending'>('all');
-  const [reportTemplate, setReportTemplate] = useState(`1) Thông tin trạm:
-- Tên trạm:
-- Mã trạm:
-- Địa chỉ:
-
-2) Công việc thực hiện:
-- Hạng mục:
-- Chi tiết thao tác:
-- Kết quả:
-
-3) Tình trạng thiết bị:
-- Nguồn điện:
-- Truyền dẫn:
-- Thiết bị chính:
-
-4) Sự cố/rủi ro:
-- Mô tả:
-- Mức độ ảnh hưởng:
-- Biện pháp xử lý tạm thời:
-
-5) Kiến nghị:
-- Vật tư/nhân lực cần bổ sung:
-- Kế hoạch follow-up:
-`);
-  const [copyStatus, setCopyStatus] = useState('');
-
-  const stationsMap = useMemo(() => {
-    return stations.reduce<Record<string, Station>>((acc, station) => {
-      acc[station.id] = station;
-      return acc;
-    }, {});
-  }, [stations]);
-
-  const selectedDateReports = useMemo(() => {
-    return reports.filter(report => report.date === selectedDate);
-  }, [reports, selectedDate]);
-
-  const filteredReports = useMemo(() => {
-    return selectedDateReports.filter(report => {
-      const stationName = report.stationName || stationsMap[report.stationId]?.name || '';
-      const keyword = search.toLowerCase();
-      const matchesSearch =
-        !keyword ||
-        stationName.toLowerCase().includes(keyword) ||
-        report.content.toLowerCase().includes(keyword);
-      const matchesStatus = statusFilter === 'all' || report.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [selectedDateReports, search, statusFilter, stationsMap]);
-
-  const monthlyStats = useMemo(() => {
-    const start = startOfMonth(parseISO(selectedDate));
-    const end = endOfMonth(parseISO(selectedDate));
-    const inMonth = reports.filter(r => isWithinInterval(parseISO(r.date), { start, end }));
-    const completed = inMonth.filter(r => r.status === 'completed').length;
-    const pending = inMonth.length - completed;
-    return { total: inMonth.length, completed, pending };
-  }, [reports, selectedDate]);
-
-  const copyTemplate = async () => {
-    try {
-      await navigator.clipboard.writeText(reportTemplate);
-      setCopyStatus('Đã sao chép mẫu báo cáo.');
-      setTimeout(() => setCopyStatus(''), 2000);
-    } catch (error) {
-      console.error(error);
-      setCopyStatus('Không thể sao chép. Hãy copy thủ công.');
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.15 }}
-      className="space-y-6 w-full"
-    >
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <h2 className="text-2xl font-bold text-gray-900">Báo cáo công việc</h2>
-        <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-gray-200">
-          <Calendar className="w-4 h-4 text-gray-400 ml-2" />
-          <input
-            type="date"
-            className="bg-transparent border-none focus:ring-0 text-sm font-medium"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        <Card className="p-3 text-center">
-          <p className="text-xs text-gray-500">Báo cáo tháng</p>
-          <p className="text-2xl font-bold text-blue-600">{monthlyStats.total}</p>
-        </Card>
-        <Card className="p-3 text-center">
-          <p className="text-xs text-gray-500">Hoàn thành</p>
-          <p className="text-2xl font-bold text-green-600">{monthlyStats.completed}</p>
-        </Card>
-        <Card className="p-3 text-center">
-          <p className="text-xs text-gray-500">Chờ xử lý</p>
-          <p className="text-2xl font-bold text-amber-600">{monthlyStats.pending}</p>
-        </Card>
-      </div>
-
-      <Card className="p-4">
-        <h3 className="font-bold text-gray-900 mb-3">Form báo cáo đề xuất (tối ưu cho đội vận hành)</h3>
-        <p className="text-sm text-gray-600 mb-3">
-          Mẫu này ưu tiên đủ thông tin cho kỹ thuật + quản lý: hiện trạng, xử lý, rủi ro, kiến nghị và kế hoạch follow-up.
-        </p>
-        <textarea
-          className="w-full border border-gray-300 rounded-lg p-3 min-h-[220px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
-          value={reportTemplate}
-          onChange={(e) => setReportTemplate(e.target.value)}
-        />
-        <div className="flex items-center justify-between mt-3">
-          <span className="text-xs text-gray-500">{copyStatus || 'Bạn có thể tùy biến mẫu theo đơn vị.'}</span>
-          <Button onClick={copyTemplate} variant="outline">
-            <Copy className="w-4 h-4" /> Sao chép mẫu
-          </Button>
-        </div>
-      </Card>
-
-      <Card className="p-4">
-        <div className="flex flex-col sm:flex-row gap-2 mb-3">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Tìm theo tên trạm hoặc nội dung..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <select
-            className="w-full sm:w-44 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'all' | 'completed' | 'pending')}
-          >
-            <option value="all">Tất cả trạng thái</option>
-            <option value="completed">Hoàn thành</option>
-            <option value="pending">Chờ xử lý</option>
-          </select>
-        </div>
-
-        <div className="space-y-3">
-          {filteredReports.length === 0 ? (
-            <div className="text-center py-8 text-gray-500 text-sm">
-              Chưa có báo cáo phù hợp bộ lọc trong ngày đã chọn.
-            </div>
-          ) : (
-            filteredReports.map(report => {
-              const station = stationsMap[report.stationId];
-              return (
-                <div key={report.id} className="border border-gray-200 rounded-xl p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="font-bold text-gray-900">{report.stationName || station?.name || 'Không xác định trạm'}</h4>
-                      <p className="text-xs text-gray-500 mt-1">Ngày: {format(parseISO(report.date), 'dd/MM/yyyy')}</p>
-                    </div>
-                    <span className={cn(
-                      "text-xs font-semibold px-2 py-1 rounded-full",
-                      report.status === 'completed' ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
-                    )}>
-                      {report.status === 'completed' ? 'Hoàn thành' : 'Chờ xử lý'}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-700 mt-3 whitespace-pre-wrap">{report.content}</p>
-                  <div className="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-100">
-                    Người thực hiện: {user.displayName || user.email || 'Không xác định'} • Số lần chỉnh sửa: {report.history?.length || 0}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </Card>
-    </motion.div>
-  );
-}
-
 function SettingsTab({ user, logout }: { user: User, logout: () => void }) {
   return (
     <motion.div 
@@ -2706,3 +2402,5 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
     </motion.div>
   );
 }
+
+
