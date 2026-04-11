@@ -643,17 +643,10 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           reader.readAsArrayBuffer(file);
         });
         
-        const read = XLSX.read || (XLSX as any).default?.read;
-        const utils = XLSX.utils || (XLSX as any).default?.utils;
-        
-        if (!read || !utils) {
-          throw new Error('Thư viện đọc Excel (XLSX) không khả dụng.');
-        }
-        
-        const workbook = read(arrayBuffer, { type: 'array' });
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        data = utils.sheet_to_json(worksheet);
+        data = XLSX.utils.sheet_to_json(worksheet);
       } else {
         throw new Error('Định dạng file không được hỗ trợ. Vui lòng tải lên file .csv, .txt, .xlsx, hoặc .xls');
       }
@@ -1488,34 +1481,45 @@ function PlannerTab({ stations, dailyPlans, user, reports }: { stations: Station
     if (!reportModalStation) return;
     const existing = reports.find(r => r.stationId === reportModalStation.id && r.date === selectedDate);
     const now = new Date().toISOString();
-    
+    const trimmedContent = reportContent.trim();
+
+    if (!trimmedContent) {
+      alert('Nội dung báo cáo không được để trống.');
+      return;
+    }
+
     try {
       if (existing) {
-        const historyEntry = {
-          userId: user.uid,
-          userName: user.email || 'Unknown',
-          timestamp: now,
-          content: existing.content || ''
-        };
-        await updateDoc(doc(db, 'reports', existing.id), {
-          content: reportContent,
+        const updatePayload: Record<string, unknown> = {
+          content: trimmedContent,
           updatedAt: now,
-          history: arrayUnion(historyEntry)
-        });
+        };
+
+        if ((existing.content || '').trim() !== trimmedContent) {
+          updatePayload.history = arrayUnion({
+            userId: user.uid,
+            userName: user.email || 'Unknown',
+            timestamp: now,
+            content: existing.content || ''
+          });
+        }
+
+        await updateDoc(doc(db, 'reports', existing.id), updatePayload);
       } else {
         await addDoc(collection(db, 'reports'), {
           stationId: reportModalStation.id,
           stationName: reportModalStation.name,
           userId: user.uid,
           date: selectedDate,
-          content: reportContent,
+          content: trimmedContent,
           status: 'completed',
           createdAt: now,
           updatedAt: now,
           history: []
         });
-        await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       }
+
+      await updateDoc(doc(db, 'stations', reportModalStation.id), { status: 'checked' });
       setReportModalStation(null);
       alert('Đã cập nhật báo cáo công việc!');
     } catch (err) {
