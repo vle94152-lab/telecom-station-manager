@@ -768,19 +768,19 @@ function StationsTab({ stations, validationWarnings, setValidationWarnings }: { 
           const prompt = `Tôi có danh sách các trạm viễn thông sau (Tên, Địa chỉ, Vĩ độ, Kinh độ):
 ${validStations.map(s => `- ${s.name} | ${s.address} | ${s.latitude}, ${s.longitude}`).join('\n')}
 
-Hãy kiểm tra xem có trạm nào mà tọa độ (vĩ độ, kinh độ) có vẻ bị sai lệch hoàn toàn so với địa chỉ không.
-Ví dụ:
-- địa chỉ ở Hà Nội nhưng tọa độ ở TP.HCM
-- tọa độ ngoài biển
-- tọa độ ngoài lãnh thổ Việt Nam
+Nhiệm vụ:
+Chỉ phát hiện các trạm có tọa độ sai lệch lớn so với địa chỉ thực tế.
+
+Chỉ cảnh báo nếu:
+- Tọa độ nằm ở tỉnh/thành khác rất xa so với địa chỉ
+- Tọa độ nằm ngoài biển
+- Tọa độ nằm ngoài lãnh thổ Việt Nam
+- Sai lệch lớn trên 1 km
 
 Trả về kết quả dưới dạng mảng JSON:
 [
   {
     "name": "Tên trạm",
-    "address": "Địa chỉ",
-    "latitude": 10.0,
-    "longitude": 106.0,
     "issue": "Mô tả lỗi",
     "recommendation": "Khuyến cáo"
   }
