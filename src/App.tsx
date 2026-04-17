@@ -581,12 +581,11 @@ function CreateReportModal({
                   </select>
                 </div>
                 {/* Total Summary */}
-                <div className="text-xs font-semibold text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 flex items-center gap-2">
-                  Tổng: <span className="text-blue-700 text-sm">{detailsList.length}</span> thiết bị
+                <div className="text-xs font-semibold text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 flex items-center gap-1">
+                  Tổng: <span className="text-blue-700 text-sm mx-1">{detailsList.length}</span>
                   {workSpace === 'Full' && (
-                     <span className="text-gray-400 font-normal">
-                       (Indoor: {detailsList.filter(d => d.spaceId === 'Indoor').length} | 
-                       Outdoor: {detailsList.filter(d => d.spaceId === 'Outdoor').length})
+                     <span className="text-gray-500 font-normal">
+                       (In: {detailsList.filter(d => d.spaceId === 'Indoor').length} | Out: {detailsList.filter(d => d.spaceId === 'Outdoor').length})
                      </span>
                   )}
                 </div>
@@ -1774,7 +1773,7 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                                 onClick={() => setViewingReport(report)}
                               >
                                 <div className="flex justify-between items-center mb-1">
-                                  <span className="font-medium text-gray-900">{format(parseISO(report.date), 'dd/MM/yyyy')}</span>
+                                  <span className="font-medium text-gray-900">{format(parseISO(report.createdAt || report.date), 'dd/MM/yyyy HH:mm:ss')}</span>
                                   <span className={cn(
                                     "text-[10px] uppercase font-bold px-1.5 py-0.5 rounded",
                                     report.status === 'completed' ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
@@ -1931,7 +1930,7 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">Ngày</p>
-                      <p className="font-medium text-gray-900">{viewingReport.date}</p>
+                      <p className="font-medium text-gray-900">{format(parseISO(viewingReport.createdAt || viewingReport.date), 'dd/MM/yyyy HH:mm:ss')}</p>
                     </div>
                     {viewingReport.technologyId && (
                       <div>
