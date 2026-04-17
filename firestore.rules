@@ -91,5 +91,20 @@ service cloud.firestore {
       allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidDailyPlan(request.resource.data);
       allow delete: if isAuthenticated() && isOwner(resource.data.userId);
     }
+
+    match /equipment_dictionary/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated(); // Should be admin only in prod, but for demo allowing all authenticated users
+    }
+
+    match /task_groups/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    match /technologies/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
   }
 }
