@@ -27,6 +27,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   @apply bg-gray-200 rounded-full hover:bg-gray-300;
 }
 
+.custom-svg-marker {
+  background: none !important;
+  border: none !important;
+}
+
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
 }

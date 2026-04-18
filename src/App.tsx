@@ -24,7 +24,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { Station, Report, DailyPlan, Tab, ValidationWarning } from './types';
+import { Station, Report, DailyPlan, Tab, ValidationWarning, EquipmentDict, TaskGroup, ReportDetail } from './types';
 import { 
   MapPin, 
   Phone, 
@@ -63,7 +63,6 @@ import {
   Bell,
   QrCode,
   Building2,
-  FileText,
   PlusCircle,
   Receipt,
   CarFront,
@@ -75,7 +74,14 @@ import {
   BookOpen,
   Wallet,
   Shield,
-  Database
+  Database,
+  Zap,
+  Ticket,
+  Percent,
+  Star,
+  Activity,
+  Layers,
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfMonth, endOfMonth, isSameMonth, parseISO, startOfWeek, endOfWeek, isWithinInterval } from 'date-fns';
@@ -88,56 +94,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, Tooltip as Le
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string;
-    email: string;
-    emailVerified: boolean;
-    isAnonymous: boolean;
-    tenantId: string;
-    providerInfo: {
-      providerId: string;
-      displayName: string;
-      email: string;
-      photoUrl: string;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid || '',
-      email: auth.currentUser?.email || '',
-      emailVerified: auth.currentUser?.emailVerified || false,
-      isAnonymous: auth.currentUser?.isAnonymous || false,
-      tenantId: auth.currentUser?.tenantId || '',
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName || '',
-        email: provider.email || '',
-        photoUrl: provider.photoURL || ''
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+import { OperationType, FirestoreErrorInfo, handleFirestoreError } from './lib/firebase-utils';
 
 // Fix for default marker icon in react-leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -147,124 +104,18 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const checkedIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-const uncheckedIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-const formatStationName = (name: string) => {
-  if (!name) return '';
-  const parts = name.split(/[-_]/);
-  if (parts.length >= 3) {
-    return parts[1].trim();
-  }
-  if (parts.length === 2) {
-    return parts[1].trim();
-  }
-  return name;
-};
-
-const plannedIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-});
-
-const iconCache: Record<string, L.DivIcon> = {};
-
-const getStationIcon = (station: Station, isPlanned: boolean = false) => {
-  if (station.icon) {
-    const borderColor = station.status === 'checked' ? '#10B981' : (isPlanned ? '#F97316' : '#EF4444');
-    const cacheKey = `${station.id}-${borderColor}-${station.icon}`;
-    
-    if (!iconCache[cacheKey]) {
-      iconCache[cacheKey] = new L.DivIcon({
-        className: 'custom-station-icon',
-        html: `<div style="width: 32px; height: 32px; border-radius: 50%; overflow: hidden; border: 3px solid ${borderColor}; background-color: white; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><img src="${station.icon}" style="width: 100%; height: 100%; object-fit: cover;" /></div>`,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32]
-      });
-    }
-    return iconCache[cacheKey];
-  }
-  if (station.status === 'checked') return checkedIcon;
-  if (isPlanned) return plannedIcon;
-  return uncheckedIcon;
-};
+import { Button } from './components/ui/Button';
+import { Input } from './components/ui/Input';
+import { Card } from './components/ui/Card';
+import { getStationIcon, formatStationName } from './lib/constants';
 
 // --- Components ---
 
-function MapUpdater({ positions }: { positions: [number, number][] }) {
-  const map = useMap();
-  const positionsStr = JSON.stringify(positions);
-  
-  useEffect(() => {
-    if (positions.length > 0) {
-      const bounds = L.latLngBounds(positions);
-      map.fitBounds(bounds, { padding: [20, 20] });
-    }
-  }, [positionsStr, map]); // Use stringified positions to avoid infinite loops
-  return null;
-}
+import { MapUpdater } from './components/MapComponents';
 
-const Button = ({ className, variant = 'primary', ...props }: any) => {
-  const variants: any = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700',
-    secondary: 'bg-gray-100 text-gray-900 hover:bg-gray-200',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
-    outline: 'border border-gray-300 text-gray-700 hover:bg-gray-50',
-    ghost: 'text-gray-600 hover:bg-gray-100'
-  };
-  return (
-    <button 
-      className={cn(
-        'px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2',
-        variants[variant],
-        className
-      )} 
-      {...props} 
-    />
-  );
-};
+// --- Reports Tab ---
 
-const Input = ({ className, ...props }: any) => (
-  <input 
-    className={cn(
-      'w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent',
-      className
-    )} 
-    {...props} 
-  />
-);
-
-const Card = ({ children, className }: any) => (
-  <div className={cn('bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden', className)}>
-    {children}
-  </div>
-);
-
-// --- Full Master-Detail Report Modal ---
-
-function CreateReportModal({
-  isOpen,
-  onClose,
+function ReportsTab({
   stations,
   user,
   equipmentDict,
@@ -273,15 +124,19 @@ function CreateReportModal({
   initialStationId = '',
   reports
 }: {
-  isOpen: boolean;
-  onClose: () => void;
   stations: Station[];
   user: User;
   equipmentDict: EquipmentDict[];
   taskGroups: TaskGroup[];
+  technologies?: string[];
   initialStationId?: string;
   reports: Report[];
 }) {
+  const [activeSubTab, setActiveSubTab] = useState<'create' | 'view'>('create');
+  const [viewingReport, setViewingReport] = useState<Report | null>(null);
+  const [reportSearch, setReportSearch] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+
   const [stationId, setStationId] = useState(initialStationId);
   const [stationSearch, setStationSearch] = useState('');
   const [isStationDropdownOpen, setIsStationDropdownOpen] = useState(false);
@@ -289,33 +144,74 @@ function CreateReportModal({
   
   useEffect(() => {
     setStationId(initialStationId);
+    if (initialStationId) setActiveSubTab('create');
   }, [initialStationId]);
 
+  const generateAutoFillDetails = (space: 'Indoor' | 'Outdoor' | 'Full', eqDict: EquipmentDict[]): ReportDetail[] => {
+    const newDetailsList: ReportDetail[] = [];
+    
+    // Helper finder emphasizing exact or closest matching
+    const findEqId = (name: string) => {
+      // Remove all spaces and convert to lowercase for the most robust matching 
+      // Allows matching "Dây Nguồn" and "dâynguồn" and " Dây  nguồn" perfectly.
+      const normalizedQuery = name.toLowerCase().replace(/\s+/g, '');
+      
+      const exact = eqDict.find(e => e.name.toLowerCase().replace(/\s+/g, '') === normalizedQuery);
+      if (exact) return exact.id;
+
+      const partial = eqDict.find(e => e.name.toLowerCase().replace(/\s+/g, '').includes(normalizedQuery));
+      return partial ? partial.id : '';
+    };
+
+    const addIndoor = () => {
+      // User requirements precisely: Baseband, Dây Nguồn, Dây Tiếp Đất 
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Indoor', equipmentId: findEqId('baseband'), quantity: 1, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Indoor', equipmentId: findEqId('dâynguồn'), quantity: 1, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Indoor', equipmentId: findEqId('dâytiếpđất'), quantity: 1, status: 'Bình thường', note: '' });
+    };
+
+    const addOutdoor = () => {
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('anten'), quantity: 3, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('rru'), quantity: 3, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('quang'), quantity: 3, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('jumper'), quantity: 3, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('dâyjet'), quantity: 3, status: 'Bình thường', note: '' });
+      newDetailsList.push({ id: Math.random().toString(36).substr(2, 9), spaceId: 'Outdoor', equipmentId: findEqId('dâynguồn'), quantity: 3, status: 'Bình thường', note: '' });
+    };
+
+    if (space === 'Indoor' || space === 'Full') addIndoor();
+    if (space === 'Outdoor' || space === 'Full') addOutdoor();
+
+    return newDetailsList;
+  };
+
   useEffect(() => {
+    if (equipmentDict.length === 0) return;
+
     if (stationId) {
       const st = stations.find(s => s.id === stationId);
       if (st && stationSearch !== st.name) {
         setStationSearch(st.name);
       }
       
-      setTaskGroupId('');
-      setWorkSpace('Indoor');
-      setContent('');
-      setDetailsList([]);
+      // We only apply autofill if it's the very first time setting up the station or if no details exist
+      if (detailsList.length === 0) {
+        setDetailsList(generateAutoFillDetails(workSpace, equipmentDict));
+      }
     } else {
-      setTaskGroupId('');
-      setWorkSpace('Indoor');
-      setContent('');
-      setDetailsList([]);
+      if (detailsList.length === 0) {
+        setDetailsList(generateAutoFillDetails(workSpace, equipmentDict));
+      }
     }
-  }, [stationId, stations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stationId, equipmentDict.length]);
 
   const [taskGroupId, setTaskGroupId] = useState('');
   const [workSpace, setWorkSpace] = useState<'Indoor' | 'Outdoor' | 'Full'>('Indoor');
   const [content, setContent] = useState('');
   const [detailsList, setDetailsList] = useState<ReportDetail[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, detailId: string | null}>({isOpen: false, detailId: null});
+  const [confirmDeleteDetailDialog, setConfirmDeleteDetailDialog] = useState<{isOpen: boolean, detailId: string | null}>({isOpen: false, detailId: null});
   const [noteDialog, setNoteDialog] = useState<{isOpen: boolean, detailId: string | null}>({isOpen: false, detailId: null});
 
   // Filter equipments based on wordSpace or spaceId
@@ -363,14 +259,14 @@ function CreateReportModal({
   };
 
   const handleRemoveDetail = (id: string) => {
-    setConfirmDialog({ isOpen: true, detailId: id });
+    setConfirmDeleteDetailDialog({ isOpen: true, detailId: id });
   };
 
   const confirmRemoveDetail = () => {
-    if (confirmDialog.detailId) {
-      setDetailsList(detailsList.filter(d => d.id !== confirmDialog.detailId));
+    if (confirmDeleteDetailDialog.detailId) {
+      setDetailsList(detailsList.filter(d => d.id !== confirmDeleteDetailDialog.detailId));
     }
-    setConfirmDialog({ isOpen: false, detailId: null });
+    setConfirmDeleteDetailDialog({ isOpen: false, detailId: null });
   };
 
   const handleChangeDetail = (id: string, field: keyof ReportDetail, value: any) => {
@@ -381,7 +277,7 @@ function CreateReportModal({
           return { ...d, [field]: value, equipmentId: '', unit: undefined };
         }
         if (field === 'equipmentId') {
-          const matchedEq = equipmentDict.find(eq => eq.name === value);
+          const matchedEq = equipmentDict.find(eq => eq.id === value || eq.name === value);
           return { ...d, [field]: value, unit: matchedEq?.unit || 'cái' };
         }
         if (field === 'quantity') {
@@ -444,9 +340,19 @@ function CreateReportModal({
       };
 
       await addDoc(collection(db, 'reports'), reportData);
+      
+      // Auto-update station status to "checked" when a report is created
+      if (selectedStation && selectedStation.status !== 'checked') {
+        await updateDoc(doc(db, 'stations', finalStationId), {
+          status: 'checked'
+        });
+      }
+
       alert("Lưu báo cáo thành công!");
       
-      onClose();
+      // Clear form
+      setStationId(''); setContent(''); setDetailsList([]); setWorkSpace('Full'); setNoteDialog({isOpen: false, detailId: null});
+      setActiveSubTab('view');
     } catch (err: any) {
       console.error(err);
       alert(`Có lỗi xảy ra khi lưu báo cáo: ${err?.message || err}`);
@@ -455,31 +361,42 @@ function CreateReportModal({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/60 z-[100] flex justify-center items-end sm:items-center">
-      <motion.div 
-        initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
-        className="bg-white w-full max-w-2xl sm:rounded-xl rounded-t-xl h-[90vh] flex flex-col shadow-2xl"
-      >
-        <div className="flex justify-between items-center p-4 border-b border-gray-200">
-          <h2 className="text-xl font-bold">Tạo Báo Cáo Hiện Trường</h2>
-          <button onClick={onClose} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
-            <X className="w-5 h-5"/>
+    <motion.div 
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} 
+      className="space-y-4 w-full relative pb-20"
+    >
+      <div className="flex flex-col sm:flex-row gap-4 mb-2">
+        <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-80 border border-gray-200">
+          <button 
+            onClick={() => setActiveSubTab('create')} 
+            className={cn("flex-1 py-1.5 sm:py-2 text-sm font-bold rounded-lg transition-all", activeSubTab === 'create' ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-700")}
+          >
+            Tạo Báo Cáo
+          </button>
+          <button 
+            onClick={() => setActiveSubTab('view')} 
+            className={cn("flex-1 py-1.5 sm:py-2 text-sm font-bold rounded-lg transition-all", activeSubTab === 'view' ? "bg-white text-blue-700 shadow-sm" : "text-gray-500 hover:text-gray-700")}
+          >
+            Xem Báo Cáo
           </button>
         </div>
+      </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Master Form */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
-              <ClipboardList className="w-5 h-5" /> 1. Thông tin chung (Master)
+      {activeSubTab === 'create' && (
+        <Card className="p-4 sm:p-6 flex-col flex shadow-sm border border-gray-200">
+          <div className="space-y-6">
+            {/* Master Form */}
+            <div className="space-y-4">
+              <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
+                <ClipboardList className="w-5 h-5" /> 1. Thông tin chung (Master)
             </h3>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div ref={stationDropdownRef} className="relative z-50">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Trạm</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Trạm <span className="text-red-500">*</span>
+                </label>
                 <div className="relative">
                   <Input 
                     type="text"
@@ -533,7 +450,9 @@ function CreateReportModal({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Loại công việc</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Loại công việc <span className="text-red-500">*</span>
+                </label>
                 <select className="w-full border p-2 rounded-lg" value={taskGroupId} onChange={(e) => setTaskGroupId(e.target.value)}>
                   <option value="">-- Chọn Loại CV --</option>
                   {taskGroups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
@@ -567,12 +486,8 @@ function CreateReportModal({
                     onChange={(e) => {
                       const newSpace = e.target.value as 'Indoor' | 'Outdoor' | 'Full';
                       setWorkSpace(newSpace);
-                      // Clear details to prevent invalid state, or auto-assign space if they switch to a specific one
-                      if (newSpace !== 'Full') {
-                        setDetailsList(detailsList.map(d => ({ ...d, spaceId: newSpace, equipmentId: '' })));
-                      } else {
-                        setDetailsList(detailsList.map(d => ({ ...d, equipmentId: '' })));
-                      }
+                      // Set auto fill when space dropdown changes
+                      setDetailsList(generateAutoFillDetails(newSpace, equipmentDict));
                     }}
                   >
                     <option value="Indoor">Indoor</option>
@@ -583,11 +498,6 @@ function CreateReportModal({
                 {/* Total Summary */}
                 <div className="text-xs font-semibold text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 flex items-center gap-1">
                   Tổng: <span className="text-blue-700 text-sm mx-1">{detailsList.length}</span>
-                  {workSpace === 'Full' && (
-                     <span className="text-gray-500 font-normal">
-                       (In: {detailsList.filter(d => d.spaceId === 'Indoor').length} | Out: {detailsList.filter(d => d.spaceId === 'Outdoor').length})
-                     </span>
-                  )}
                 </div>
               </div>
             </div>
@@ -598,14 +508,14 @@ function CreateReportModal({
                   const availableEquipments = getEquipmentsForSpace(detail.spaceId || workSpace);
                   const hasNote = detail.note && detail.note.trim().length > 0;
                   return (
-                    <div key={detail.id} className="flex gap-2 items-center bg-white p-2 border border-gray-200 rounded-lg shadow-sm">
-                      <div className="flex-1 min-w-0">
+                    <div key={detail.id} className="flex gap-2 items-center bg-white p-2 border border-gray-200 rounded-lg shadow-sm w-full">
+                      <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-white/95 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_10px_-4px_rgba(0,0,0,0.15)] flex items-center">
                         <select className="w-full border-gray-200 bg-gray-50 focus:bg-white p-1.5 rounded-md text-sm border truncate" value={detail.equipmentId} onChange={e => handleChangeDetail(detail.id, 'equipmentId', e.target.value)}>
                           <option value="">- Chọn Thiết bị -</option>
-                          {availableEquipments.map(eq => <option key={eq} value={eq}>{eq}</option>)}
+                          {equipmentDict.filter(eq => eq.validSpaces.includes(detail.spaceId || workSpace)).map(eq => <option key={eq.id} value={eq.id}>{eq.name}</option>)}
                         </select>
                       </div>
-                      <div className="w-28 shrink-0">
+                      <div className="flex-1 shrink-0 min-w-[100px]">
                         <Input value={detail.status} onChange={(e: any) => handleChangeDetail(detail.id, 'status', e.target.value)} placeholder="Tình trạng" className="w-full p-1.5 text-sm h-8" />
                       </div>
                       <div className="w-[100px] shrink-0 flex items-center gap-1">
@@ -637,19 +547,19 @@ function CreateReportModal({
 
                 const renderSpaceBlock = (spaceCode: 'Indoor'|'Outdoor'|'') => {
                     const items = detailsList.filter(d => spaceCode ? d.spaceId === spaceCode : true);
-                    const title = spaceCode === 'Indoor' ? <><Home className="w-4 h-4"/> INDOOR</> : spaceCode === 'Outdoor' ? <><Cloud className="w-4 h-4"/> OUTDOOR</> : null;
+                    const title = spaceCode === 'Indoor' ? <><Home className="w-4 h-4"/> INDOOR : {items.length}</> : spaceCode === 'Outdoor' ? <><Cloud className="w-4 h-4"/> OUTDOOR : {items.length}</> : null;
                     const titleClass = spaceCode === 'Indoor' ? "text-indigo-700" : "text-blue-700";
                     
                     return (
-                        <div key={spaceCode} className="bg-gray-50/50 p-3 rounded-xl border border-gray-200 border-dashed space-y-3 overflow-x-auto">
-                             {title && <h4 className={`font-bold flex items-center gap-1.5 text-sm ${titleClass}`}>{title}</h4>}
+                        <div key={spaceCode} className="bg-gray-50/50 p-2 sm:p-3 rounded-xl border border-gray-200 border-dashed space-y-3 overflow-x-auto relative">
+                             {title && <h4 className={`font-bold flex items-center gap-1.5 text-sm px-1 ${titleClass}`}>{title}</h4>}
                              {items.length === 0 ? (
                                  <div className="text-center py-4 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg bg-white/50">Chưa có thiết bị.</div>
                              ) : (
-                                 <div className="space-y-2 min-w-[500px]">
+                                 <div className="space-y-2 min-w-[600px] pb-1">
                                      <div className="flex gap-2 items-center px-2 py-1 text-xs font-semibold text-gray-500">
-                                       <div className="flex-1">Thiết bị</div>
-                                       <div className="w-28 text-center shrink-0">Tình trạng</div>
+                                       <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-gray-50/90 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_8px_-4px_rgba(0,0,0,0.05)]">Thiết bị</div>
+                                       <div className="flex-1 text-center min-w-[100px]">Tình trạng</div>
                                        <div className="w-[100px] text-center shrink-0">Số lượng</div>
                                        <div className="w-12 text-center shrink-0">Ghi chú</div>
                                        <div className="w-8 shrink-0"></div>
@@ -681,17 +591,221 @@ function CreateReportModal({
           </div>
         </div>
 
-        <div className="p-4 border-t border-gray-200 flex gap-3">
-          <Button variant="secondary" className="flex-1 py-3" onClick={onClose}>Hủy</Button>
-          <Button className="flex-1 py-3" onClick={handleSubmit} disabled={isSubmitting}>
-            {isSubmitting ? 'Đang lưu...' : 'Lưu Báo Cáo'}
+        <div className="p-4 sm:p-6 pb-8">
+          <Button 
+            className="w-full py-4 text-base sm:text-lg rounded-xl font-bold shadow-lg shadow-blue-500/20 transition-all active:scale-[0.98]" 
+            onClick={handleSubmit} 
+            disabled={isSubmitting || !stationId || detailsList.length === 0}
+          >
+            <Save className="w-5 h-5" />
+            {isSubmitting ? 'Đang lưu báo cáo...' : 'Lưu'}
           </Button>
         </div>
-      </motion.div>
+        </Card>
+      )}
+
+      {activeSubTab === 'view' && (
+        <Card className="flex-col flex shadow-sm border border-gray-200 min-h-[400px]">
+          <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2">
+              <History className="w-5 h-5 text-blue-600" /> Lịch sử Báo Cáo
+            </h3>
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input 
+                className="pl-9 h-9 text-sm w-full" 
+                placeholder="Tìm trạm, nội dung..." 
+                value={reportSearch}
+                onChange={(e: any) => setReportSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="p-2 sm:p-4 bg-gray-50/50 flex-1">
+            <div className="grid grid-cols-1 gap-3">
+              {(() => {
+                const searchLower = reportSearch.toLowerCase();
+                const filteredReports = reports.filter(r => {
+                  const station = stations.find(s => s.id === r.stationId);
+                  const stationName = station ? station.name : r.stationName;
+                  return (stationName && stationName.toLowerCase().includes(searchLower)) ||
+                         (r.content && r.content.toLowerCase().includes(searchLower));
+                }).sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date));
+
+                if (filteredReports.length === 0) {
+                  return (
+                    <div className="text-center py-12 text-gray-400 italic">
+                      Không tìm thấy báo cáo nào.
+                    </div>
+                  );
+                }
+
+                return filteredReports.map(report => {
+                  const station = stations.find(s => s.id === report.stationId);
+                  const displayStationName = station ? station.name : report.stationName;
+                  return (
+                    <div 
+                      key={report.id} 
+                      className="bg-white border border-gray-200 hover:border-blue-300 rounded-xl p-3 sm:p-4 shadow-sm cursor-pointer transition-all hover:shadow-md"
+                      onClick={() => setViewingReport(report)}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-blue-600 shrink-0" />
+                          <h4 className="font-bold text-gray-900 text-sm sm:text-base">{displayStationName}</h4>
+                        </div>
+                        <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm text-gray-500 whitespace-nowrap">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            {format(parseISO(report.createdAt || report.date), 'dd/MM/yyyy HH:mm:ss')}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-600 line-clamp-2 mb-2 break-words">{report.content || 'Không có ghi chú'}</p>
+                      <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+                        <div className="text-xs font-medium text-blue-600">
+                          {report.equipmentDetails && report.equipmentDetails.length > 0 
+                            ? `+ ${report.equipmentDetails.length} dòng thiết bị`
+                            : 'Không có chi tiết thiết bị'}
+                        </div>
+                        <span className={cn(
+                          "text-[10px] uppercase font-bold px-2 py-1 rounded-full",
+                          report.status === 'completed' ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                        )}>
+                          {report.status === 'completed' ? 'Hoàn thành' : 'Đang xử lý'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Viewing Report Modal inside ReportsTab */}
+      <AnimatePresence>
+        {viewingReport && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 z-[110] flex justify-center items-end sm:items-center p-0 sm:p-4"
+          >
+            <motion.div 
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              className="bg-white w-full max-w-2xl sm:rounded-xl rounded-t-xl h-[90vh] flex flex-col shadow-2xl"
+            >
+              <div className="flex justify-between items-center p-4 border-b border-gray-200">
+                <h2 className="text-xl font-bold">Chi tiết Báo Cáo</h2>
+                <div className="flex items-center gap-1">
+                  <button 
+                    onClick={() => {
+                      setConfirmDialog({
+                        isOpen: true,
+                        title: 'Xóa báo cáo',
+                        message: `Bạn có chắc chắn muốn xóa báo cáo này không? Hành động này không thể hoàn tác.`,
+                        onConfirm: async () => {
+                          try {
+                            setConfirmDialog(p => ({ ...p, isOpen: false }));
+                            await deleteDoc(doc(db, 'reports', viewingReport.id));
+                            setViewingReport(null);
+                          } catch (e) {
+                            console.error("Lỗi xóa báo cáo:", e);
+                            alert("Có lỗi khi xóa báo cáo!");
+                          }
+                        }
+                      });
+                    }}
+                    className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5"/>
+                  </button>
+                  <button onClick={() => setViewingReport(null)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                    <X className="w-5 h-5"/>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-24">
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-gray-500">Trạm</p>
+                      <p className="font-bold text-gray-900">{viewingReport.stationName || stations.find(s => s.id === viewingReport.stationId)?.name || viewingReport.stationId}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Ngày</p>
+                      <p className="font-medium text-gray-900">{format(parseISO(viewingReport.createdAt || viewingReport.date), 'dd/MM/yyyy HH:mm:ss')}</p>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <p className="text-sm text-gray-500">Ghi chú tổng quát</p>
+                    <p className="bg-gray-50 p-3 rounded-lg text-sm text-gray-800 whitespace-pre-wrap">{viewingReport.content}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
+                     <Settings2 className="w-5 h-5" /> Chi tiết thiết bị (Detail)
+                  </h3>
+                  
+                  {(!viewingReport.equipmentDetails || viewingReport.equipmentDetails.length === 0) ? (
+                    <div className="text-center py-4 text-gray-400 bg-gray-50 rounded-lg italic">
+                      Không có thiết bị/vật tư nào được chi tiết trong báo cáo này.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {Array.from(new Set(viewingReport.equipmentDetails.map(d => d.spaceId))).map(space => {
+                        const spaceDetails = viewingReport.equipmentDetails!.filter(d => d.spaceId === space);
+                        const isIndoor = space.toLowerCase() === 'indoor';
+                        
+                        return (
+                          <div key={space} className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                            <div className="bg-gray-100 px-3 py-2 font-bold text-gray-800 flex items-center gap-2 border-b border-gray-200">
+                              {isIndoor ? <Home className="w-4 h-4 text-indigo-600" /> : <Cloud className="w-4 h-4 text-blue-500" />}
+                              {space.toUpperCase()}
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm text-left border-collapse">
+                                <thead className="bg-white text-gray-500 text-xs uppercase border-b">
+                                  <tr>
+                                    <th className="px-3 py-2 font-medium">Thiết bị</th>
+                                    <th className="px-3 py-2 text-center font-medium">SL</th>
+                                    <th className="px-3 py-2 font-medium">Tình trạng</th>
+                                    <th className="px-3 py-2 font-medium">Ghi chú</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {spaceDetails.map((detail, idx) => (
+                                    <tr key={idx} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50 bg-white">
+                                      <td className="px-3 py-2 font-medium text-gray-800">
+                                        {equipmentDict.find(eq => eq.id === detail.equipmentId)?.name || detail.equipmentId || '-'}
+                                      </td>
+                                      <td className="px-3 py-2 text-center whitespace-nowrap text-blue-700 font-semibold">
+                                        {detail.quantity} {detail.unit && <span className="text-xs text-blue-500/70 font-normal ml-0.5">{detail.unit}</span>}
+                                      </td>
+                                      <td className="px-3 py-2 text-gray-600">{detail.status || '-'}</td>
+                                      <td className="px-3 py-2 text-xs text-gray-500 italic">{detail.note || '-'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Detail Delete Confirmation Modal */}
       <AnimatePresence>
-        {confirmDialog.isOpen && (
+        {confirmDeleteDetailDialog.isOpen && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110] p-4"
@@ -703,7 +817,7 @@ function CreateReportModal({
               <h3 className="text-lg font-bold text-gray-900 mb-2">Xác nhận xóa</h3>
               <p className="text-gray-600 mb-6 text-sm">Bạn có chắc chắn muốn xóa thiết bị này khỏi danh sách báo cáo không?</p>
               <div className="flex justify-end gap-3">
-                <Button variant="secondary" size="sm" onClick={() => setConfirmDialog({ isOpen: false, detailId: null })}>Hủy</Button>
+                <Button variant="secondary" size="sm" onClick={() => setConfirmDeleteDetailDialog({ isOpen: false, detailId: null })}>Hủy</Button>
                 <Button variant="danger" size="sm" onClick={confirmRemoveDetail}>Xóa</Button>
               </div>
             </motion.div>
@@ -755,7 +869,7 @@ function CreateReportModal({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }
 
@@ -841,7 +955,9 @@ export default function App() {
           { name: 'Anten', validSpaces: ['Outdoor'] },
           { name: 'Sợi quang', validSpaces: ['Indoor', 'Outdoor'] },
           { name: 'Jumper', validSpaces: ['Indoor', 'Outdoor'] },
-          { name: 'Dây nguồn', validSpaces: ['Indoor', 'Outdoor'] }
+          { name: 'Dây nguồn', validSpaces: ['Indoor', 'Outdoor'] },
+          { name: 'Dây Jet', validSpaces: ['Indoor', 'Outdoor'] },
+          { name: 'Dây tiếp đất', validSpaces: ['Indoor', 'Outdoor'] }
         ];
         try {
           for (const eq of initialEquipments) {
@@ -851,7 +967,20 @@ export default function App() {
           console.error("Failed to seed equipment dictionary", e);
         }
       } else {
-        setEquipmentDict(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EquipmentDict)));
+        const dict = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EquipmentDict));
+        setEquipmentDict(dict);
+        
+        // Ensure missing required items exist
+        const requiredMissing = [];
+        if (!dict.some(d => d.name.toLowerCase() === 'dây jet')) {
+          requiredMissing.push({ name: 'Dây Jet', validSpaces: ['Indoor', 'Outdoor'] });
+        }
+        if (!dict.some(d => d.name.toLowerCase() === 'dây tiếp đất')) {
+          requiredMissing.push({ name: 'Dây tiếp đất', validSpaces: ['Indoor', 'Outdoor'] });
+        }
+        if (requiredMissing.length > 0) {
+          requiredMissing.forEach(eq => addDoc(collection(db, 'equipment_dictionary'), eq).catch(console.error));
+        }
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'equipment_dictionary');
@@ -909,7 +1038,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
+    <div className="min-h-screen bg-gradient-to-b from-[#bde0fe] via-[#e0f2fe] to-gray-50 pb-24">
       {/* Header */}
       {activeTab !== 'dashboard' && (
         <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
@@ -932,17 +1061,17 @@ export default function App() {
       )}
 
       {/* Main Content */}
-      <main className={cn("max-w-4xl mx-auto relative", activeTab !== 'dashboard' ? "p-4" : "")}>
-        {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
+      <main className={cn("mx-auto relative", activeTab !== 'dashboard' ? "p-3 sm:p-6 pb-24 max-w-4xl" : "pb-24")}>
+        {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} logout={logout} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} setActiveTab={setActiveTab} />}
         {activeTab === 'stations' && <StationsTab key="stations" stations={stations} reports={reports} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
-        {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} onOpenCreateReport={(stationId) => { setPrefilledStationId(stationId); setIsCreateReportModalOpen(true); }} />}
-        {activeTab === 'settings' && <SettingsTab key="settings" user={user} logout={logout} />}
+        {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} onOpenCreateReport={(stationId) => { setPrefilledStationId(stationId); setActiveTab('reports'); }} />}
         {activeTab === 'admin' && <AdminTab key="admin" equipmentDict={equipmentDict} taskGroups={taskGroups} />}
+        {activeTab === 'reports' && <ReportsTab key="reports" stations={stations} user={user} equipmentDict={equipmentDict} taskGroups={taskGroups} technologies={['2G', '3G', '4G', '5G']} initialStationId={prefilledStationId} reports={reports} />}
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl z-40">
-        <div className="max-w-4xl mx-auto flex justify-between items-center px-4 sm:px-6 py-2 relative">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.08)] rounded-t-[2rem] z-40 pb-[env(safe-area-inset-bottom)]">
+        <div className="max-w-4xl mx-auto flex justify-between items-end px-4 sm:px-8 relative h-[4.5rem]">
           <NavButton 
             active={activeTab === 'dashboard'} 
             onClick={() => setActiveTab('dashboard')} 
@@ -956,83 +1085,71 @@ export default function App() {
             label="Lộ trình" 
           />
           
-          {/* Floating Action Button */}
-          <div className="relative -top-8 flex justify-center w-14 sm:w-16 shrink-0">
-            <div className="absolute w-16 h-16 sm:w-20 sm:h-20 bg-white rounded-full -top-1 sm:-top-2 flex items-center justify-center shadow-[0_-10px_20px_-5px_rgba(0,0,0,0.05)]">
-              <button 
-                onClick={() => { setPrefilledStationId(''); setIsCreateReportModalOpen(true); }}
-                className="w-12 h-12 sm:w-16 sm:h-16 bg-[#b90000] rounded-full flex items-center justify-center text-white shadow-lg hover:bg-red-800 transition-colors"
-                title="Tạo báo cáo nhanh"
-              >
-                <span className="text-3xl sm:text-4xl font-light leading-none mb-1">+</span>
-              </button>
+          <div 
+             className="relative -top-5 flex flex-col items-center group cursor-pointer w-16 sm:w-20" 
+             onClick={() => { setPrefilledStationId(''); setActiveTab('reports'); }}
+          >
+            <div className={cn(
+              "w-14 h-14 bg-white rounded-full flex items-center justify-center shadow-lg transform transition-transform group-hover:scale-105 border-[3px] border-gray-50",
+               activeTab === 'reports' ? "shadow-blue-500/30" : "shadow-gray-200/50"
+            )}>
+               <div className={cn(
+                 "w-full h-full rounded-full flex items-center justify-center transition-colors", 
+                 activeTab === 'reports' ? "bg-gradient-to-tr from-blue-600 to-cyan-500 text-white" : "text-gray-500"
+               )}>
+                  <span className="transform -rotate-12"><Activity className="w-6 h-6" /></span>
+               </div>
             </div>
+            <span className={cn(
+               "text-[9px] sm:text-[10px] mt-1 whitespace-nowrap transition-all", 
+               activeTab === 'reports' ? "font-bold text-blue-600" : "font-medium text-gray-500"
+            )}>Báo cáo</span>
           </div>
 
           <NavButton 
             active={activeTab === 'stations'} 
             onClick={() => setActiveTab('stations')} 
-            icon={<MapPin />} 
+            icon={<List />} 
             label="Danh sách" 
           />
           <NavButton 
             active={activeTab === 'admin'} 
             onClick={() => setActiveTab('admin')} 
-            icon={<Shield />} 
+            icon={<Settings2 />} 
             label="Quản trị" 
-          />
-          <NavButton 
-            active={activeTab === 'settings'} 
-            onClick={() => setActiveTab('settings')} 
-            icon={<Settings />} 
-            label="Cài đặt" 
           />
         </div>
       </nav>
 
-      {/* Full-screen Master-Detail Report Modal */}
-      {user && (
-        <CreateReportModal 
-          isOpen={isCreateReportModalOpen} 
-          onClose={() => setIsCreateReportModalOpen(false)} 
-          stations={stations} 
-          user={user} 
-          equipmentDict={equipmentDict}
-          taskGroups={taskGroups}
-          initialStationId={prefilledStationId}
-          reports={reports}
-        />
-      )}
+      {/* Bottom Navigation */}
     </div>
   );
 }
 
 function NavButton({ active, onClick, icon, label }: any) {
-  const isLong = label.length > 10;
   return (
     <button 
       onClick={onClick}
       className={cn(
-        'flex flex-col items-center gap-1.5 pt-2 pb-1 transition-all duration-300 w-16 overflow-hidden group',
-        active ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+        'flex flex-col items-center gap-1 pb-2 transition-all duration-300 w-14 sm:w-16 overflow-hidden group',
+        active ? 'text-blue-600' : 'text-gray-500 hover:text-gray-900'
       )}
     >
       <div className={cn(
-        "relative w-12 h-10 rounded-2xl transition-all duration-300 flex items-center justify-center",
-        active ? "bg-blue-600 text-white shadow-md shadow-blue-600/30" : "bg-transparent text-gray-500 group-hover:bg-gray-100"
+        "relative w-8 h-8 flex items-center justify-center transition-all duration-300",
+        active ? "text-blue-600" : "text-gray-500"
       )}>
         {React.cloneElement(icon, { 
           className: cn(
-            'w-5 h-5 flex-shrink-0 transition-all duration-300', 
-            active ? 'stroke-[2.5px]' : 'stroke-2'
+            'w-6 h-6 flex-shrink-0 transition-all duration-300', 
+            active ? 'stroke-[2.5px]' : 'stroke-1 relative top-[1px]'
           ) 
         })}
       </div>
-      <div className="nav-text-container">
+      <div className="nav-text-container w-full px-0.5">
         <span className={cn(
-          "text-[10px] nav-text-scroll transition-all duration-300", 
-          active ? "font-bold" : "font-medium",
-          isLong ? "is-long" : ""
+          "text-[9px] sm:text-[10px] whitespace-nowrap overflow-hidden text-ellipsis block text-center transition-all duration-300", 
+          active ? "font-bold" : "font-medium"
         )}>{label}</span>
       </div>
     </button>
@@ -1514,14 +1631,6 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
               <Input type="number" step="any" placeholder="Kinh độ (Lng)" value={newStation.longitude || ''} onChange={(e: any) => setNewStation({...newStation, longitude: parseFloat(e.target.value)})} required />
               <Input placeholder="Người quản lý" value={newStation.managerName || ''} onChange={(e: any) => setNewStation({...newStation, managerName: e.target.value})} required />
               <Input placeholder="Số điện thoại" value={newStation.managerPhone || ''} onChange={(e: any) => setNewStation({...newStation, managerPhone: e.target.value})} required />
-              <select 
-                className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={newStation.status || 'unchecked'}
-                onChange={(e: any) => setNewStation({...newStation, status: e.target.value as 'checked' | 'unchecked'})}
-              >
-                <option value="unchecked">Chưa kiểm tra</option>
-                <option value="checked">Đã kiểm tra</option>
-              </select>
               <div className="sm:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Biểu tượng / Hình ảnh trạm</label>
                 <div className="flex items-center gap-4">
@@ -1535,7 +1644,10 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                     </div>
                   </label>
                   {newStation.icon && (
-                    <button type="button" onClick={() => setNewStation({...newStation, icon: undefined})} className="text-red-500 text-sm hover:underline">Xóa</button>
+                    <button type="button" onClick={() => {
+                      const { icon, ...rest } = newStation;
+                      setNewStation(rest);
+                    }} className="text-red-500 text-sm hover:underline">Xóa</button>
                   )}
                 </div>
               </div>
@@ -1545,26 +1657,26 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
         </Card>
       )}
 
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
+      <div className="flex flex-col sm:flex-row gap-3 justify-between items-center">
         <div className="relative flex-1 w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
           <Input 
             className="pl-10 w-full" 
-            placeholder="Tìm kiếm tên trạm hoặc người quản lý..." 
+            placeholder="Tìm trạm hoặc người quản lý..." 
             value={search}
             onChange={(e: any) => setSearch(e.target.value)}
           />
         </div>
         <div className="flex gap-2 w-full sm:w-auto">
-          <div className="relative" ref={dropdownRef}>
+          <div className="relative flex-1 sm:flex-none" ref={dropdownRef}>
             <button 
               onClick={() => setIsManagerDropdownOpen(!isManagerDropdownOpen)}
-              className="border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white flex items-center justify-between min-w-[200px]"
+              className="border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white flex items-center justify-between w-full min-w-[160px]"
             >
               <span className="truncate">
-                {filterManagers.length === 0 ? 'Tất cả người quản lý' : `Đã chọn ${filterManagers.length} người`}
+                {filterManagers.length === 0 ? 'Tất cả QL' : `Đã chọn ${filterManagers.length}`}
               </span>
-              <ChevronDown className="w-4 h-4 ml-2" />
+              <ChevronDown className="w-4 h-4 ml-2 flex-shrink-0" />
             </button>
             
             {isManagerDropdownOpen && (
@@ -1612,14 +1724,6 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                   <Input type="number" step="any" placeholder="Kinh độ (Lng)" value={editingStation.longitude || ''} onChange={(e: any) => setEditingStation({...editingStation, longitude: parseFloat(e.target.value)})} required />
                   <Input placeholder="Người quản lý" value={editingStation.managerName || ''} onChange={(e: any) => setEditingStation({...editingStation, managerName: e.target.value})} required />
                   <Input placeholder="Số điện thoại" value={editingStation.managerPhone || ''} onChange={(e: any) => setEditingStation({...editingStation, managerPhone: e.target.value})} required />
-                  <select 
-                    className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    value={editingStation.status || 'unchecked'}
-                    onChange={(e: any) => setEditingStation({...editingStation, status: e.target.value as 'checked' | 'unchecked'})}
-                  >
-                    <option value="unchecked">Chưa kiểm tra</option>
-                    <option value="checked">Đã kiểm tra</option>
-                  </select>
                   <div className="sm:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Biểu tượng / Hình ảnh trạm</label>
                     <div className="flex items-center gap-4">
@@ -1633,7 +1737,10 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                         </div>
                       </label>
                       {editingStation.icon && (
-                        <button type="button" onClick={() => setEditingStation({...editingStation, icon: undefined})} className="text-red-500 text-sm hover:underline">Xóa</button>
+                        <button type="button" onClick={() => {
+                          const { icon, ...rest } = editingStation;
+                          setEditingStation(rest as Station);
+                        }} className="text-red-500 text-sm hover:underline">Xóa</button>
                       )}
                     </div>
                   </div>
@@ -1646,57 +1753,57 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
             ) : (
               <div className="flex flex-col gap-2">
                 <div 
-                  className="flex justify-between items-start cursor-pointer" 
+                  className="flex justify-between items-start cursor-pointer group-hover:bg-gray-50/50 -m-4 p-4 rounded-lg transition-colors" 
                   onClick={() => setExpandedStationId(expandedStationId === station.id ? null : station.id)}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-start sm:items-center gap-3 w-full min-w-0 pr-2">
                     {station.icon ? (
-                      <img src={station.icon} alt={station.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200" referrerPolicy="no-referrer" />
+                      <img src={station.icon} alt={station.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200 shrink-0" referrerPolicy="no-referrer" />
                     ) : (
-                      <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
+                      <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
                         <MapPin className="w-5 h-5" />
                       </div>
                     )}
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap min-w-0">
                         {station.infrastructureCode && (
-                          <span className="text-xs font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                          <span className="text-[10px] sm:text-xs font-bold bg-gray-100 text-gray-600 px-1.5 sm:px-2 py-0.5 rounded">
                             {station.infrastructureCode}
                           </span>
                         )}
-                        <h3 className="font-bold text-lg text-gray-900">{station.name}</h3>
+                        <h3 className="font-bold text-base sm:text-lg text-gray-900 truncate max-w-full">{station.name}</h3>
                         {station.infrastructureDepartment && (
-                          <span className="text-xs font-medium text-blue-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded">
+                          <span className="text-[10px] sm:text-xs font-medium text-blue-600 bg-blue-50 border border-blue-100 px-1.5 sm:px-2 py-0.5 rounded whitespace-nowrap">
                             {station.infrastructureDepartment}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
-                        <div className="flex items-center gap-1.5">
-                          <UserIcon className="w-4 h-4" />
-                          <span>{station.managerName || 'Chưa cập nhật'}</span>
+                      <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500 mt-1 flex-wrap">
+                        <div className="flex items-center gap-1">
+                          <UserIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
+                          <span className="truncate max-w-[100px] sm:max-w-none">{station.managerName || 'Chưa cập nhật'}</span>
                         </div>
                         {station.managerPhone && (
-                          <a href={`tel:${station.managerPhone}`} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 hover:text-blue-600 transition-colors">
-                            <Phone className="w-4 h-4" />
+                          <a href={`tel:${station.managerPhone}`} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 hover:text-blue-600 transition-colors">
+                            <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
                             <span>{station.managerPhone}</span>
                           </a>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5 shrink-0 ml-auto -mr-2">
                     <button 
                       onClick={(e) => { e.stopPropagation(); setEditingStation(station); }}
-                      className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
+                      className="p-2.5 sm:p-2 text-gray-400 hover:text-blue-600 transition-colors bg-gray-50/50 hover:bg-blue-50 rounded-lg sm:rounded-full ml-1"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                     </button>
                     <button 
                       onClick={(e) => { e.stopPropagation(); handleDelete(station.id); }}
-                      className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                      className="p-2.5 sm:p-2 text-gray-400 hover:text-red-600 transition-colors bg-gray-50/50 hover:bg-red-50 rounded-lg sm:rounded-full"
                     >
-                      <Trash2 className="w-5 h-5" />
+                      <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
                     </button>
                   </div>
                 </div>
@@ -1709,7 +1816,7 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="pt-4 border-t border-gray-100 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="pt-4 mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2">
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <h4 className="text-sm font-semibold text-gray-900">Thông tin địa chỉ</h4>
@@ -1747,47 +1854,6 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                               </div>
                             </div>
                           </a>
-                        </div>
-                      </div>
-                      <div className="mt-4 pt-4 border-t border-gray-100">
-                        <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                          <ClipboardList className="w-4 h-4" />
-                          Báo cáo tháng này 
-                        </h4>
-                        <div className="space-y-2">
-                          {(() => {
-                            const thisMonthReports = reports.filter(r => {
-                              if (r.stationId !== station.id) return false;
-                              const reportDate = parseISO(r.date);
-                              return isSameMonth(reportDate, new Date());
-                            }).sort((a, b) => b.date.localeCompare(a.date));
-
-                            if (thisMonthReports.length === 0) {
-                              return <p className="text-sm text-gray-500 italic">Chưa có báo cáo nào trong tháng này.</p>;
-                            }
-
-                            return thisMonthReports.map(report => (
-                              <div 
-                                key={report.id} 
-                                className="bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors border border-transparent hover:border-gray-200 rounded-lg p-3 text-sm"
-                                onClick={() => setViewingReport(report)}
-                              >
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="font-medium text-gray-900">{format(parseISO(report.createdAt || report.date), 'dd/MM/yyyy HH:mm:ss')}</span>
-                                  <span className={cn(
-                                    "text-[10px] uppercase font-bold px-1.5 py-0.5 rounded",
-                                    report.status === 'completed' ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
-                                  )}>
-                                    {report.status === 'completed' ? 'Hoàn thành' : 'Đang xử lý'}
-                                  </span>
-                                </div>
-                                <p className="text-gray-600 line-clamp-2">{report.content || 'Không có nội dung chi tiết.'}</p>
-                                {report.equipmentDetails && report.equipmentDetails.length > 0 && (
-                                  <p className="text-xs text-blue-600 mt-1 font-medium">Bao gồm {report.equipmentDetails.reduce((acc, curr) => acc + curr.quantity, 0)} thiết bị/vật tư.</p>
-                                )}
-                              </div>
-                            ));
-                          })()}
                         </div>
                       </div>
                     </motion.div>
@@ -1873,141 +1939,6 @@ function StationsTab({ stations, reports, validationWarnings, setValidationWarni
                 <Button onClick={processUpload} disabled={!columnMapping.name || !columnMapping.latitude || !columnMapping.longitude}>
                   Xác nhận & Nhập dữ liệu
                 </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* View Report Modal */}
-      <AnimatePresence>
-        {viewingReport && (
-          <motion.div 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 z-[100] flex justify-center items-end sm:items-center p-0 sm:p-4"
-          >
-            <motion.div 
-              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
-              className="bg-white w-full max-w-2xl sm:rounded-xl rounded-t-xl h-[90vh] flex flex-col shadow-2xl"
-            >
-              <div className="flex justify-between items-center p-4 border-b border-gray-200">
-                <h2 className="text-xl font-bold">Chi tiết Báo Cáo</h2>
-                <div className="flex items-center gap-1">
-                  <button 
-                    onClick={() => {
-                      setConfirmDialog({
-                        isOpen: true,
-                        title: 'Xóa báo cáo',
-                        message: `Bạn có chắc chắn muốn xóa báo cáo ngày ${format(parseISO(viewingReport.date), 'dd/MM/yyyy')} không? Hành động này không thể hoàn tác.`,
-                        onConfirm: async () => {
-                          try {
-                            await deleteDoc(doc(db, 'reports', viewingReport.id));
-                            setViewingReport(null);
-                            setConfirmDialog(p => ({ ...p, isOpen: false }));
-                          } catch (e) {
-                            console.error("Lỗi xóa báo cáo:", e);
-                            alert("Có lỗi khi xóa báo cáo!");
-                          }
-                        }
-                      });
-                    }}
-                    className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
-                  >
-                    <Trash2 className="w-5 h-5"/>
-                  </button>
-                  <button onClick={() => setViewingReport(null)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
-                    <X className="w-5 h-5"/>
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500">Trạm</p>
-                      <p className="font-bold text-gray-900">{viewingReport.stationName || stations.find(s => s.id === viewingReport.stationId)?.name || viewingReport.stationId}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">Ngày</p>
-                      <p className="font-medium text-gray-900">{format(parseISO(viewingReport.createdAt || viewingReport.date), 'dd/MM/yyyy HH:mm:ss')}</p>
-                    </div>
-                    {viewingReport.technologyId && (
-                      <div>
-                        <p className="text-sm text-gray-500">Công nghệ</p>
-                        <p className="font-medium text-gray-900">{viewingReport.technologyId}</p>
-                      </div>
-                    )}
-                    {viewingReport.taskGroupId && (
-                      <div>
-                        <p className="text-sm text-gray-500">Loại CV</p>
-                        <p className="font-medium text-gray-900">
-                          {/* Mapped via simple comparison or just ID if not found */}
-                          {['TG01', 'TG02', 'TG03', 'TG04'].includes(viewingReport.taskGroupId) ? 
-                            (['Lắp đặt', 'Tích hợp', 'Sửa chữa', 'Thu hồi'][['TG01', 'TG02', 'TG03', 'TG04'].indexOf(viewingReport.taskGroupId)] || viewingReport.taskGroupId)
-                          : viewingReport.taskGroupId}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500">Ghi chú tổng quát</p>
-                    <p className="bg-gray-50 p-3 rounded-lg text-sm text-gray-800 whitespace-pre-wrap">{viewingReport.content}</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
-                     <Settings2 className="w-5 h-5" /> Chi tiết thiết bị (Detail)
-                  </h3>
-                  
-                  {(!viewingReport.equipmentDetails || viewingReport.equipmentDetails.length === 0) ? (
-                    <div className="text-center py-4 text-gray-400 bg-gray-50 rounded-lg italic">
-                      Không có thiết bị/vật tư nào được chi tiết trong báo cáo này.
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {Array.from(new Set(viewingReport.equipmentDetails.map(d => d.spaceId))).map(space => {
-                        const spaceDetails = viewingReport.equipmentDetails!.filter(d => d.spaceId === space);
-                        const isIndoor = space.toLowerCase() === 'indoor';
-                        
-                        return (
-                          <div key={space} className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                            <div className="bg-gray-100 px-3 py-2 font-bold text-gray-800 flex items-center gap-2 border-b border-gray-200">
-                              {isIndoor ? <Home className="w-4 h-4 text-indigo-600" /> : <Cloud className="w-4 h-4 text-blue-500" />}
-                              {space.toUpperCase()}
-                            </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm text-left border-collapse">
-                                <thead className="bg-white text-gray-500 text-xs uppercase border-b">
-                                  <tr>
-                                    <th className="px-3 py-2 font-medium">Thiết bị</th>
-                                    <th className="px-3 py-2 text-center font-medium">SL</th>
-                                    <th className="px-3 py-2 font-medium">Tình trạng</th>
-                                    <th className="px-3 py-2 font-medium">Ghi chú</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {spaceDetails.map((detail, idx) => (
-                                    <tr key={idx} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50 bg-white">
-                                      <td className="px-3 py-2 font-medium text-gray-800">{detail.equipmentId || '-'}</td>
-                                      <td className="px-3 py-2 text-center whitespace-nowrap text-blue-700 font-semibold">
-                                        {detail.quantity} {detail.unit && <span className="text-xs text-blue-500/70 font-normal ml-0.5">{detail.unit}</span>}
-                                      </td>
-                                      <td className="px-3 py-2 text-gray-600">{detail.status || '-'}</td>
-                                      <td className="px-3 py-2 text-xs text-gray-500 italic">{detail.note || '-'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               </div>
             </motion.div>
           </motion.div>
@@ -2450,40 +2381,40 @@ function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateReport }:
                       <div className="text-xs text-gray-500 mt-1.5">{station.managerName || 'Chưa có QL'}</div>
                       <div className="text-xs text-gray-500">{station.managerPhone || 'Chưa có SĐT'}</div>
                     </div>
-                    <div className="grid grid-cols-2 gap-1.5 shrink-0">
+                    <div className="grid grid-cols-2 gap-1.5 shrink-0 max-w-[80px]">
                       <a 
                         href={`https://www.google.com/maps/dir/?api=1&destination=${station.latitude},${station.longitude}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center justify-center transition-colors"
+                        className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex items-center justify-center transition-colors"
                         title="Chỉ đường"
                       >
                         <Navigation className="w-4 h-4" />
                       </a>
                       
                       {station.managerPhone ? (
-                        <a href={`tel:${station.managerPhone}`} className="p-2 text-green-600 bg-green-50 hover:bg-green-100 rounded-lg flex items-center justify-center transition-colors" title="Gọi điện">
+                        <a href={`tel:${station.managerPhone}`} className="p-1.5 text-green-600 bg-green-50 hover:bg-green-100 rounded-lg flex items-center justify-center transition-colors" title="Gọi điện">
                           <Phone className="w-4 h-4" />
                         </a>
                       ) : (
-                        <div className="p-2"></div>
+                        <div className="p-1.5"></div>
                       )}
                       
                       {isSaved ? (
                         <button 
                           onClick={() => onOpenCreateReport(station.id)}
-                          className={cn("p-2 rounded-lg transition-colors flex items-center justify-center", isCompleted ? "text-blue-600 bg-blue-50 hover:bg-blue-100" : "text-amber-600 bg-amber-50 hover:bg-amber-100")}
+                          className={cn("p-1.5 rounded-lg transition-colors flex items-center justify-center", isCompleted ? "text-blue-600 bg-blue-50 hover:bg-blue-100" : "text-amber-600 bg-amber-50 hover:bg-amber-100")}
                           title="Cập nhật công việc"
                         >
                           <ClipboardCheck className="w-4 h-4" />
                         </button>
                       ) : (
-                        <div className="p-2"></div>
+                        <div className="p-1.5"></div>
                       )}
 
                       <button 
                         onClick={() => setStationToRemove(station)}
-                        className="p-2 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors"
+                        className="p-1.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors"
                         title="Xóa khỏi lộ trình"
                       >
                         <X className="w-4 h-4" />
@@ -2496,12 +2427,14 @@ function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateReport }:
           </div>
 
           <div className="flex gap-2 mt-4">
-            <Button onClick={() => setConfirmSavePlan(true)} className="flex-1 py-4">
-              Lưu kế hoạch ngày
+            <Button onClick={() => setConfirmSavePlan(true)} className="flex-1 py-4 flex items-center justify-center gap-2">
+              <Save className="w-5 h-5" />
+              Lưu
             </Button>
             {currentPlan && (
-              <Button onClick={() => setConfirmDeletePlan(true)} variant="secondary" className="py-4 bg-red-50 text-red-600 hover:bg-red-100 border-red-200">
-                Xóa kế hoạch
+              <Button onClick={() => setConfirmDeletePlan(true)} variant="secondary" className="py-4 bg-red-50 text-red-600 hover:bg-red-100 border-red-200 flex-1 flex items-center justify-center gap-2">
+                <Trash2 className="w-5 h-5" />
+                Xóa
               </Button>
             )}
           </div>
@@ -2634,342 +2567,9 @@ function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateReport }:
   );
 }
 
-function AdminTab({ equipmentDict, taskGroups }: { equipmentDict: EquipmentDict[], taskGroups: TaskGroup[] }) {
-  // Equipment States
-  const [newEqName, setNewEqName] = useState('');
-  const [newEqSpaces, setNewEqSpaces] = useState<string[]>([]);
-  const [newEqUnit, setNewEqUnit] = useState('cái');
-  const [isAddingEq, setIsAddingEq] = useState(false);
-  const [editingEq, setEditingEq] = useState<EquipmentDict | null>(null);
+import { AdminTab } from './pages/AdminTab';
 
-  // Task Group States
-  const [newTaskGroup, setNewTaskGroup] = useState('');
-  const [isAddingTaskGroup, setIsAddingTaskGroup] = useState(false);
-  const [editingTaskGroup, setEditingTaskGroup] = useState<TaskGroup | null>(null);
-
-  // General tab state
-  const [activeConfigTab, setActiveConfigTab] = useState<'eq' | 'tg'>('eq');
-
-  const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({
-    isOpen: false, title: '', message: '', onConfirm: () => {}
-  });
-
-  const SPACES = ['Indoor', 'Outdoor'];
-
-  // --- Equipment Handlers ---
-  const toggleSpace = (space: string, isEditing: boolean) => {
-    if (isEditing && editingEq) {
-      setEditingEq({
-        ...editingEq,
-        validSpaces: editingEq.validSpaces.includes(space) 
-          ? editingEq.validSpaces.filter(s => s !== space) 
-          : [...editingEq.validSpaces, space]
-      });
-    } else {
-      setNewEqSpaces(prev => prev.includes(space) ? prev.filter(s => s !== space) : [...prev, space]);
-    }
-  };
-
-  const handleAddEquipment = async () => {
-    if (!newEqName || newEqSpaces.length === 0) {
-      setConfirmDialog({
-        isOpen: true, title: "Lỗi nhập liệu", message: "Vui lòng nhập tên thiết bị và chọn ít nhất 1 không gian!",
-        onConfirm: () => setConfirmDialog(prev => ({...prev, isOpen: false}))
-      });
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'equipment_dictionary'), { name: newEqName, validSpaces: newEqSpaces, unit: newEqUnit || 'cái' });
-      setNewEqName('');
-      setNewEqSpaces([]);
-      setNewEqUnit('cái');
-      setIsAddingEq(false);
-    } catch (e) { console.error("Lỗi:", e); }
-  };
-
-  const handleUpdateEquipment = async () => {
-    if (!editingEq || !editingEq.name || editingEq.validSpaces.length === 0) {
-      setConfirmDialog({
-        isOpen: true, title: "Lỗi nhập liệu", message: "Vui lòng nhập đầy đủ thông tin!",
-        onConfirm: () => setConfirmDialog(prev => ({...prev, isOpen: false}))
-      });
-      return;
-    }
-    try {
-      await updateDoc(doc(db, 'equipment_dictionary', editingEq.id), {
-        name: editingEq.name,
-        validSpaces: editingEq.validSpaces,
-        unit: editingEq.unit || 'cái'
-      });
-      setEditingEq(null);
-    } catch (e) { console.error("Lỗi cập nhật:", e); }
-  };
-
-  const handleDeleteEquipment = (id: string) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: "Xác nhận xóa",
-      message: "Bạn có chắc chắn muốn xóa thiết bị này khỏi danh mục?",
-      onConfirm: async () => {
-        try { await deleteDoc(doc(db, 'equipment_dictionary', id)); } catch (e) { console.error("Lỗi:", e); }
-        setConfirmDialog(prev => ({...prev, isOpen: false}));
-      }
-    });
-  };
-
-  // --- Task Group Handlers ---
-  const handleAddTaskGroup = async () => {
-    if (!newTaskGroup) { 
-      setConfirmDialog({ isOpen: true, title: "Lỗi", message: "Vui lòng nhập tên loại công việc", onConfirm: () => setConfirmDialog(p => ({...p, isOpen: false})) });
-      return; 
-    }
-    try {
-      await addDoc(collection(db, 'task_groups'), { name: newTaskGroup });
-      setNewTaskGroup('');
-      setIsAddingTaskGroup(false);
-    } catch (e) { console.error("Lỗi:", e); }
-  };
-
-  const handleUpdateTaskGroup = async () => {
-    if (!editingTaskGroup || !editingTaskGroup.name) return;
-    try {
-      await updateDoc(doc(db, 'task_groups', editingTaskGroup.id), { name: editingTaskGroup.name });
-      setEditingTaskGroup(null);
-    } catch (e) { console.error("Lỗi:", e); }
-  };
-
-  const handleDeleteTaskGroup = (id: string) => {
-    setConfirmDialog({
-      isOpen: true, title: "Xác nhận xóa", message: "Xóa loại công việc này?",
-      onConfirm: async () => {
-        try { await deleteDoc(doc(db, 'task_groups', id)); } catch (e) { console.error("Lỗi:", e); }
-        setConfirmDialog(p => ({...p, isOpen: false}));
-      }
-    });
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.15 }} className="space-y-6 w-full">
-      {/* Confirm Modal */}
-      <AnimatePresence>
-        {confirmDialog.isOpen && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[100]">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl">
-              <h3 className="text-xl font-bold text-gray-900 mb-2">{confirmDialog.title}</h3>
-              <p className="text-gray-600 mb-6">{confirmDialog.message}</p>
-              <div className="flex gap-3">
-                <Button variant="secondary" className="flex-1" onClick={() => setConfirmDialog(p => ({...p, isOpen: false}))}>Hủy</Button>
-                <Button className="flex-1" onClick={confirmDialog.onConfirm}>Xác nhận</Button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-gray-900">Quản trị Hệ thống</h2>
-      </div>
-
-      <Card className="p-0 overflow-hidden">
-        <div className="p-4 bg-gray-50 border-b border-gray-100">
-          <h3 className="font-bold text-gray-900 flex items-center gap-2 mb-4">
-            <Database className="w-5 h-5 text-blue-600" />
-            Cấu hình Dữ liệu nguồn (Master Data)
-          </h3>
-          
-          <div className="flex space-x-2 border-b border-gray-200 overflow-x-auto pb-px">
-            <button onClick={() => setActiveConfigTab('eq')} className={cn("px-4 py-2 text-sm font-medium border-b-2 whitespace-nowrap transition-colors", activeConfigTab === 'eq' ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")}>
-              Thiết bị & Vật tư
-            </button>
-            <button onClick={() => setActiveConfigTab('tg')} className={cn("px-4 py-2 text-sm font-medium border-b-2 whitespace-nowrap transition-colors", activeConfigTab === 'tg' ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")}>
-              Loại công việc
-            </button>
-          </div>
-        </div>
-        
-        <div className="p-4 bg-white min-h-[300px]">
-          {/* TAB: EQUIPMENT */}
-          {activeConfigTab === 'eq' && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                <div className="text-sm text-gray-600">Quản lý danh mục thiết bị và không gian cài đặt tương ứng.</div>
-                <Button size="sm" onClick={() => setIsAddingEq(!isAddingEq)}>
-                  {isAddingEq ? 'Hủy' : '+ Thêm mới'}
-                </Button>
-              </div>
-
-              <AnimatePresence>
-                {isAddingEq && (
-                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="p-4 border rounded-lg bg-gray-50 space-y-4 overflow-hidden">
-                    <div className="flex flex-col sm:flex-row gap-4">
-                      <div className="flex-1">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Tên thiết bị</label>
-                        <Input value={newEqName} onChange={(e: any) => setNewEqName(e.target.value)} placeholder="VD: Acquy tia chớp" />
-                      </div>
-                      <div className="w-full sm:w-32">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Đơn vị (ĐVT)</label>
-                        <select className="w-full border p-1.5 rounded-md text-sm border-gray-200 h-10" value={newEqUnit} onChange={e => setNewEqUnit(e.target.value)}>
-                          <option value="cái">Cái</option>
-                          <option value="bộ">Bộ</option>
-                          <option value="m">Mét (m)</option>
-                          <option value="cuộn">Cuộn</option>
-                          <option value="sợi">Sợi</option>
-                          <option value="chiếc">Chiếc</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Không gian áp dụng</label>
-                      <div className="flex gap-4">
-                        {SPACES.map(sp => (
-                          <label key={sp} className="flex items-center gap-2 cursor-pointer">
-                            <input type="checkbox" checked={newEqSpaces.includes(sp)} onChange={() => toggleSpace(sp, false)} className="w-4 h-4 text-blue-600 rounded" />
-                            <span className="text-sm text-gray-700">{sp}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <Button onClick={handleAddEquipment} className="w-full">Lưu thiết bị mới</Button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {equipmentDict.map(eq => (
-                  <div key={eq.id} className="border border-gray-200 p-3 rounded-lg hover:shadow-sm transition-all bg-white relative group">
-                    {editingEq?.id === eq.id ? (
-                      <div className="space-y-3">
-                        <div className="flex gap-2">
-                          <Input value={editingEq.name} onChange={(e: any) => setEditingEq({...editingEq, name: e.target.value})} className="flex-1 h-8 text-sm font-medium" />
-                          <Input value={editingEq.unit || ''} onChange={(e: any) => setEditingEq({...editingEq, unit: e.target.value})} placeholder="ĐVT" className="w-20 h-8 text-sm" />
-                        </div>
-                        <div className="flex gap-3">
-                          {SPACES.map(sp => (
-                            <label key={sp} className="flex items-center gap-1.5 cursor-pointer">
-                              <input type="checkbox" checked={editingEq.validSpaces.includes(sp)} onChange={() => toggleSpace(sp, true)} className="w-3.5 h-3.5" />
-                              <span className="text-xs text-gray-600">{sp}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="flex gap-2">
-                          <Button size="sm" onClick={handleUpdateEquipment} className="w-full h-8 text-xs">Lưu</Button>
-                          <Button size="sm" variant="secondary" onClick={() => setEditingEq(null)} className="w-full h-8 text-xs">Hủy</Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="pr-14">
-                          <div className="font-medium text-gray-900 text-sm">
-                            {eq.name}
-                            {eq.unit && <span className="ml-2 text-xs font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border">đvt: {eq.unit}</span>}
-                          </div>
-                          <div className="flex gap-1 mt-1.5">
-                            {eq.validSpaces.map(sp => (
-                              <span key={sp} className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium", sp === 'Indoor' ? 'bg-indigo-50 text-indigo-600' : 'bg-orange-50 text-orange-600')}>
-                                {sp}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="absolute top-2 right-2 flex opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => setEditingEq(eq)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded">
-                            <Settings2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => handleDeleteEquipment(eq.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* TAB: TASK GROUPS */}
-          {activeConfigTab === 'tg' && (
-            <div className="space-y-4">
-               <div className="flex justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                <div className="text-sm text-gray-600">Danh sách các nhóm công việc chính cho kỹ thuật viên.</div>
-                <Button size="sm" onClick={() => setIsAddingTaskGroup(!isAddingTaskGroup)}>
-                  {isAddingTaskGroup ? 'Hủy' : '+ Thêm mới'}
-                </Button>
-              </div>
-
-              <AnimatePresence>
-                {isAddingTaskGroup && (
-                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="p-4 border rounded-lg bg-gray-50 flex gap-2 overflow-hidden">
-                    <Input value={newTaskGroup} onChange={(e: any) => setNewTaskGroup(e.target.value)} placeholder="Tên loại công việc..." className="flex-1" />
-                    <Button onClick={handleAddTaskGroup}>Lưu</Button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {taskGroups.map(tg => (
-                  <div key={tg.id} className="border p-2 rounded-lg group flex justify-between items-center hover:border-gray-300">
-                    {editingTaskGroup?.id === tg.id ? (
-                      <div className="flex gap-1 w-full">
-                        <Input value={editingTaskGroup.name} onChange={(e: any) => setEditingTaskGroup({...editingTaskGroup, name: e.target.value})} className="h-8 text-sm flex-1" />
-                        <button onClick={handleUpdateTaskGroup} className="bg-blue-600 text-white px-2 rounded font-medium text-xs">Lưu</button>
-                        <button onClick={() => setEditingTaskGroup(null)} className="bg-gray-200 text-gray-700 px-2 rounded font-medium text-xs">Hủy</button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="font-medium text-sm text-gray-800 ml-1">{tg.name}</span>
-                        <div className="flex opacity-0 group-hover:opacity-100">
-                           <button onClick={() => setEditingTaskGroup(tg)} className="p-1.5 text-gray-400 hover:text-blue-600">
-                             <Settings2 className="w-3.5 h-3.5" />
-                           </button>
-                           <button onClick={() => handleDeleteTaskGroup(tg.id)} className="p-1.5 text-gray-400 hover:text-red-600">
-                             <Trash2 className="w-3.5 h-3.5" />
-                           </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </Card>
-    </motion.div>
-  );
-}
-
-function SettingsTab({ user, logout }: { user: User, logout: () => void }) {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.15 }} className="space-y-6 w-full">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-gray-900">Cài đặt cá nhân</h2>
-      </div>
-
-      <Card className="p-6">
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center overflow-hidden shrink-0">
-            {user.photoURL ? (
-              <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-            ) : (
-              <UserIcon className="w-8 h-8 text-gray-400" />
-            )}
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">{user.displayName || 'Người dùng'}</h3>
-            <p className="text-gray-500">{user.email}</p>
-          </div>
-        </div>
-      </Card>
-
-      <Button onClick={logout} variant="danger" className="w-full py-4 text-lg mt-8">
-        <LogOut className="w-5 h-5" /> Đăng xuất
-      </Button>
-    </motion.div>
-  );
-}
-
-function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings, setValidationWarnings }: { stations: Station[], reports: Report[], dailyPlans: DailyPlan[], user: User, validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void }) {
+function DashboardTab({ stations, reports, dailyPlans, user, logout, validationWarnings, setValidationWarnings, setActiveTab }: { stations: Station[], reports: Report[], dailyPlans: DailyPlan[], user: User, logout: () => void, validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void, setActiveTab: (tab: Tab) => void }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterManager, setFilterManager] = useState('');
@@ -3090,38 +2690,36 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
       transition={{ duration: 0.15 }}
       className="pb-24 bg-gray-50 w-full"
     >
-      {/* Header Section */}
-      <div className="relative bg-gradient-to-b from-blue-600 to-blue-800 rounded-b-[2.5rem] pt-12 pb-24 px-4 text-white shadow-lg">
-        <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white to-transparent rounded-b-[2.5rem]"></div>
-        
-        <div className="relative z-10 flex justify-between items-start">
-          <label className="w-14 h-14 bg-white rounded-full flex items-center justify-center p-1 shadow-md cursor-pointer relative group">
-            <input type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
-            <div className="w-full h-full bg-blue-100 rounded-full flex items-center justify-center text-blue-600 overflow-hidden">
+      {/* Header Layout (Clean and Modern) */}
+      <div className="relative pt-8 pb-4 px-4 sm:px-6">
+        <div className="flex justify-between items-start mb-6">
+          <div className="flex flex-col">
+            <h1 className="text-[1.75rem] font-bold text-slate-800 leading-[1.15] mb-1">
+              Thêm tiện ích cho<br/>công việc quản lý
+            </h1>
+            <div className="text-sm text-slate-500 font-medium mt-1">Xin chào, {user.displayName || 'Người dùng'}</div>
+          </div>
+          <div className="flex gap-2">
+            <button className="relative w-10 h-10 text-slate-700 bg-white hover:bg-slate-50 shadow-sm rounded-full flex items-center justify-center transition-colors" onClick={() => setShowNotifications(true)}>
+              <Bell className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            <label className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm cursor-pointer relative group overflow-hidden">
+              <input type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
               {user.photoURL ? (
                 <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
               ) : (
-                <UserIcon className="w-6 h-6" />
+                <UserIcon className="w-5 h-5 text-blue-600" />
               )}
-            </div>
-            <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-              <Upload className="w-4 h-4 text-white" />
-            </div>
-          </label>
-          <div className="flex flex-col items-center">
-            <div className="bg-white text-blue-800 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 mb-1 shadow-sm">
-              Xin chào <Award className="w-4 h-4 text-yellow-500" />
-            </div>
-            <h2 className="text-xl font-bold">{user.displayName || 'Người dùng'}</h2>
+            </label>
+            <button className="relative w-10 h-10 text-slate-700 bg-white hover:bg-slate-50 shadow-sm rounded-full flex items-center justify-center transition-colors" onClick={logout} title="Đăng xuất">
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
-          <button className="relative p-2" onClick={() => setShowNotifications(true)}>
-            <Bell className="w-7 h-7" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-blue-600">
-                {unreadCount}
-              </span>
-            )}
-          </button>
         </div>
       </div>
 
@@ -3198,72 +2796,8 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
         )}
       </AnimatePresence>
 
-      {/* Stats Section */}
-      <div className="px-4 -mt-10 relative z-20">
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
-          <div 
-            onClick={() => setFilterStatus('all')}
-            className={cn("rounded-2xl p-2 sm:p-4 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'all' ? "bg-blue-50 border-blue-200 ring-2 ring-blue-500" : "bg-white border-gray-100 hover:bg-gray-50")}
-          >
-            <div className="text-2xl sm:text-3xl font-bold text-blue-600 mb-1">{stats.total}</div>
-            <div className="text-[10px] sm:text-xs text-gray-500 font-medium text-center">Tổng số trạm</div>
-          </div>
-          <div 
-            onClick={() => setFilterStatus('checked')}
-            className={cn("rounded-2xl p-2 sm:p-4 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'checked' ? "bg-green-50 border-green-200 ring-2 ring-green-500" : "bg-white border-gray-100 hover:bg-gray-50")}
-          >
-            <div className="text-2xl sm:text-3xl font-bold text-green-500 mb-1">{stats.checked}</div>
-            <div className="text-[10px] sm:text-xs text-gray-500 font-medium text-center">Đã kiểm tra</div>
-          </div>
-          <div 
-            onClick={() => setFilterStatus('unchecked')}
-            className={cn("rounded-2xl p-2 sm:p-4 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'unchecked' ? "bg-red-50 border-red-200 ring-2 ring-red-500" : "bg-white border-gray-100 hover:bg-gray-50")}
-          >
-            <div className="text-2xl sm:text-3xl font-bold text-red-500 mb-1">{stats.unchecked}</div>
-            <div className="text-[10px] sm:text-xs text-gray-500 font-medium text-center">Chưa kiểm tra</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Chart Section */}
-      <div className="px-4 mt-6">
-        <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-          <h3 className="font-bold text-gray-900 mb-4">Tỷ lệ kiểm tra trạm</h3>
-          <div className="h-48 w-full">
-            {stats.total > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <RechartsTooltip 
-                    formatter={(value: number) => [`${value} trạm`, 'Số lượng']}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">
-                Chưa có dữ liệu
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
       {/* Map Section */}
-      <div className="px-4 mt-6">
+      <div className="px-4 mt-2">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-gray-900">Bản đồ tổng thể</h3>
           <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-1 rounded-full">{filteredStations.length} trạm</span>
@@ -3280,28 +2814,6 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <select 
-              className="w-full sm:flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={filterDepartment}
-              onChange={(e) => setFilterDepartment(e.target.value)}
-            >
-              <option value="">Tất cả phòng hạ tầng</option>
-              {uniqueDepartments.map(dept => (
-                <option key={dept} value={dept}>{dept}</option>
-              ))}
-            </select>
-            <select 
-              className="w-full sm:flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={filterManager}
-              onChange={(e) => setFilterManager(e.target.value)}
-            >
-              <option value="">Tất cả người quản lý</option>
-              {uniqueManagers.map(manager => (
-                <option key={manager} value={manager}>{manager}</option>
-              ))}
-            </select>
           </div>
         </div>
 
@@ -3355,6 +2867,117 @@ function DashboardTab({ stations, reports, dailyPlans, user, validationWarnings,
               </Marker>
             )})}
           </MapContainer>
+        </div>
+      </div>
+
+      {/* Stats Section & Chart */}
+      <div className="px-4 sm:px-6 mt-6 relative z-20">
+        <div className="bg-white rounded-[1.5rem] pt-5 pb-6 px-4 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-white/60">
+          <div className="flex items-center gap-2 mb-4 mt-1">
+            <div className="p-1 bg-green-100 rounded-md text-green-600">
+               <Database className="w-4 h-4" />
+            </div>
+            <h3 className="font-bold text-slate-800 text-base">Tổng quan dữ liệu</h3>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-6">
+            <div 
+              onClick={() => setFilterStatus('all')}
+              className={cn("rounded-[1.125rem] p-3 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'all' ? "bg-blue-50 border-blue-200 ring-2 ring-blue-500/20" : "bg-white border-slate-100 hover:bg-slate-50")}
+            >
+              <div className="text-2xl font-bold text-blue-600 mb-0.5">{stats.total}</div>
+              <div className="text-[10px] text-slate-500 font-medium text-center">Tổng số</div>
+            </div>
+            <div 
+              onClick={() => setFilterStatus('checked')}
+              className={cn("rounded-[1.125rem] p-3 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'checked' ? "bg-emerald-50 border-emerald-200 ring-2 ring-emerald-500/20" : "bg-white border-slate-100 hover:bg-slate-50")}
+            >
+              <div className="text-2xl font-bold text-emerald-500 mb-0.5">{stats.checked}</div>
+              <div className="text-[10px] text-slate-500 font-medium text-center">Đã kiểm tra</div>
+            </div>
+            <div 
+              onClick={() => setFilterStatus('unchecked')}
+              className={cn("rounded-[1.125rem] p-3 shadow-sm border flex flex-col items-center justify-center cursor-pointer transition-all", filterStatus === 'unchecked' ? "bg-rose-50 border-rose-200 ring-2 ring-rose-500/20" : "bg-white border-slate-100 hover:bg-slate-50")}
+            >
+              <div className="text-2xl font-bold text-rose-500 mb-0.5">{stats.unchecked}</div>
+              <div className="text-[10px] text-slate-500 font-medium text-center">Chưa K/T</div>
+            </div>
+          </div>
+          
+          <div className="h-44 w-full">
+            {stats.total > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={70}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {chartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip 
+                    formatter={(value: number) => [`${value} trạm`, 'Số lượng']}
+                    contentStyle={{ borderRadius: '12px', border: '1px solid #f1f5f9', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
+                  />
+                  <Legend verticalAlign="bottom" height={24} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#64748b' }} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 space-y-2">
+                <Database className="w-8 h-8 text-slate-200" />
+                <div className="text-xs font-medium">Chưa có dữ liệu</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="px-4 sm:px-6 mt-6 mb-8 relative z-20">
+        <div className="bg-white rounded-[1.5rem] pt-5 pb-6 px-4 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-white/60">
+          <div className="flex items-center gap-2 mb-5">
+            <div className="p-1 bg-blue-100 rounded-md text-blue-600">
+               <Layers className="w-4 h-4" />
+            </div>
+            <h3 className="font-bold text-slate-800 text-base">Tính năng thường dùng</h3>
+          </div>
+          
+          <div className="grid grid-cols-4 gap-x-2 gap-y-4">
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('stations')}>
+              <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-blue-500 bg-white group-hover:bg-blue-50 transition-colors shadow-sm">
+                <Map className="w-6 h-6 stroke-[1.5]" />
+              </div>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Bản đồ<br/>Trạm</span>
+            </div>
+            
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('reports')}>
+              <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-emerald-500 bg-white group-hover:bg-emerald-50 transition-colors shadow-sm">
+                <ClipboardCheck className="w-6 h-6 stroke-[1.5]" />
+              </div>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Tạo<br/>Báo cáo</span>
+            </div>
+
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('stations')}>
+              <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-amber-500 bg-white group-hover:bg-amber-50 transition-colors shadow-sm">
+                <Upload className="w-6 h-6 stroke-[1.5]" />
+              </div>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Nhập<br/>Dữ liệu</span>
+            </div>
+
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setShowNotifications(true)}>
+              <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-rose-500 bg-white group-hover:bg-rose-50 transition-colors shadow-sm relative">
+                <Bell className="w-6 h-6 stroke-[1.5]" />
+                {unreadCount > 0 && <span className="absolute top-0 right-0 w-3 h-3 bg-rose-500 rounded-full border-2 border-white"></span>}
+              </div>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Cảnh báo<br/>Hệ thống</span>
+            </div>
+          </div>
         </div>
       </div>
     </motion.div>

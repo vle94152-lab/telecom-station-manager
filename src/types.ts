@@ -73,7 +73,7 @@ export interface DailyPlan {
   stationIds: string[];
 }
 
-export type Tab = 'dashboard' | 'stations' | 'planner' | 'settings' | 'admin';
+export type Tab = 'dashboard' | 'stations' | 'planner' | 'settings' | 'admin' | 'reports';
 
 export interface ValidationWarning {
   id: string;
