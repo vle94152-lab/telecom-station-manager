@@ -3,7 +3,7 @@ import { collection, addDoc, doc, updateDoc, query, getDocs, deleteDoc } from 'f
 import { motion, AnimatePresence } from 'framer-motion';
 import { format, parseISO } from 'date-fns';
 import { db } from '../firebase';
-import { Station, EquipmentDict, TaskGroup, Report, ReportDetail } from '../types';
+import { Station, EquipmentDict, TaskGroup, Workspace, Report, ReportDetail } from '../types';
 import { User } from 'firebase/auth';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -17,6 +17,7 @@ export function ReportsTab({
   user,
   equipmentDict,
   taskGroups,
+  workspaces,
   technologies,
   initialStationId = '',
   reports
@@ -25,6 +26,7 @@ export function ReportsTab({
   user: User;
   equipmentDict: EquipmentDict[];
   taskGroups: TaskGroup[];
+  workspaces: Workspace[];
   technologies?: string[];
   initialStationId?: string;
   reports: Report[];
@@ -32,6 +34,7 @@ export function ReportsTab({
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'view'>('create');
   const [viewingReport, setViewingReport] = useState<Report | null>(null);
   const [reportSearch, setReportSearch] = useState('');
+  const [toastMessage, setToastMessage] = useState<{message: string, type: 'success' | 'error' | 'info'} | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
   const [stationId, setStationId] = useState(initialStationId);
@@ -104,6 +107,7 @@ export function ReportsTab({
   }, [stationId, equipmentDict.length]);
 
   const [taskGroupId, setTaskGroupId] = useState('');
+  const [reportContent, setReportContent] = useState('');
   const [workSpace, setWorkSpace] = useState<'Indoor' | 'Outdoor' | 'Full'>('Indoor');
   const [detailsList, setDetailsList] = useState<ReportDetail[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -203,7 +207,11 @@ export function ReportsTab({
       alert("Vui lòng chọn đủ Trạm trong danh sách và Loại Công Việc!");
       return;
     }
-    if (detailsList.some(d => !d.spaceId || !d.equipmentId || d.quantity <= 0)) {
+
+    const selectedTaskGroup = taskGroups.find(tg => tg.id === taskGroupId);
+    const hasEquipmentModule = selectedTaskGroup?.modules?.includes('EQUIPMENT') ?? (selectedTaskGroup?.requiresEquipment !== false);
+
+    if (hasEquipmentModule && detailsList.some(d => !d.spaceId || !d.equipmentId || d.quantity <= 0)) {
       alert("Vui lòng điền đủ thông tin cho tất cả thiết bị (Không gian, Loại, Số lượng > 0)!");
       return;
     }
@@ -221,8 +229,8 @@ export function ReportsTab({
         taskGroupId: taskGroupId,
         date: today,
         workSpace: workSpace,
-        content: '',
-        equipmentDetails: detailsList,
+        content: reportContent.trim() ? reportContent.trim() : (hasEquipmentModule ? 'Báo cáo chi tiết thiết bị' : 'Báo cáo khảo sát & bảo dưỡng chung'),
+        equipmentDetails: hasEquipmentModule ? detailsList : [],
         status: 'completed',
         createdAt: now,
         completedAt: now,
@@ -231,7 +239,7 @@ export function ReportsTab({
           userId: user.uid,
           userName: user.displayName || user.email || 'Unknown',
           timestamp: now,
-          content: 'Tạo mới báo cáo Master-Detail'
+          content: hasEquipmentModule ? 'Tạo mới báo cáo Master-Detail' : 'Tạo mới báo cáo khảo sát/chung'
         }]
       };
 
@@ -244,14 +252,16 @@ export function ReportsTab({
         });
       }
 
-      alert("Lưu báo cáo thành công!");
+      setToastMessage({ message: "Lưu báo cáo thành công!", type: 'success' });
+      setTimeout(() => setToastMessage(null), 3000);
       
       // Clear form
-      setStationId(''); setDetailsList([]); setWorkSpace('Full'); setNoteDialog({isOpen: false, detailId: null});
+      setStationId(''); setDetailsList([]); setWorkSpace('Full'); setNoteDialog({isOpen: false, detailId: null}); setReportContent('');
       setActiveSubTab('view');
     } catch (err: any) {
       console.error(err);
-      alert(`Có lỗi xảy ra khi lưu báo cáo: ${err?.message || err}`);
+      setToastMessage({ message: `Lỗi: ${err?.message || err}`, type: 'error' });
+      setTimeout(() => setToastMessage(null), 5000);
     } finally {
       setIsSubmitting(false);
     }
@@ -351,7 +361,7 @@ export function ReportsTab({
                 </label>
                 <select className="w-full border p-2 rounded-lg" value={taskGroupId} onChange={(e) => setTaskGroupId(e.target.value)}>
                   <option value="">-- Chọn Loại CV --</option>
-                  {taskGroups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                  {taskGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                 </select>
               </div>
             </div>
@@ -359,126 +369,147 @@ export function ReportsTab({
           </div>
 
           {/* Details Form */}
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center border-b pb-2 gap-3">
-              <h3 className="font-semibold text-blue-700 flex items-center gap-2">
-                <Settings2 className="w-5 h-5" /> 2. Chi tiết thiết bị (Detail)
-              </h3>
-              
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border">
-                  <select 
-                    className="bg-transparent text-sm font-medium focus:outline-none"
-                    value={workSpace}
-                    onChange={(e) => {
-                      const newSpace = e.target.value as 'Indoor' | 'Outdoor' | 'Full';
-                      setWorkSpace(newSpace);
-                      // Set auto fill when space dropdown changes
-                      setDetailsList(generateAutoFillDetails(newSpace, equipmentDict));
-                    }}
-                  >
-                    <option value="Indoor">Indoor</option>
-                    <option value="Outdoor">Outdoor</option>
-                    <option value="Full">Indoor & Outdoor</option>
-                  </select>
+          {(() => {
+            const selectedTaskGroup = taskGroups.find(tg => tg.id === taskGroupId);
+            // Default to true if no taskGroupId selected yet to help them see what might appear
+            const showEquipmentDetails = taskGroupId ? (selectedTaskGroup?.modules?.includes('EQUIPMENT') ?? (selectedTaskGroup?.requiresEquipment !== false)) : false;
+            
+            if (!showEquipmentDetails) return null;
+
+            return (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center border-b pb-2 gap-3">
+                  <h3 className="font-semibold text-blue-700 flex items-center gap-2">
+                    <Settings2 className="w-5 h-5" /> 2. Chi tiết thiết bị (Detail)
+                  </h3>
+                  
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border">
+                      <select 
+                        className="bg-transparent text-sm font-medium focus:outline-none"
+                        value={workSpace}
+                        onChange={(e) => {
+                          const newSpace = e.target.value as 'Indoor' | 'Outdoor' | 'Full';
+                          setWorkSpace(newSpace);
+                          setDetailsList(generateAutoFillDetails(newSpace, equipmentDict));
+                        }}
+                      >
+                        {workspaces.map(ws => (
+                          <option key={ws.id} value={ws.name}>{ws.name}</option>
+                        ))}
+                        <option value="Full">Tất cả không gian</option>
+                      </select>
+                    </div>
+                    {/* Total Summary */}
+                    <div className="text-xs font-semibold text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 flex items-center gap-1">
+                      Tổng: <span className="text-blue-700 text-sm mx-1">{detailsList.length}</span>
+                    </div>
+                  </div>
                 </div>
-                {/* Total Summary */}
-                <div className="text-xs font-semibold text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 flex items-center gap-1">
-                  Tổng: <span className="text-blue-700 text-sm mx-1">{detailsList.length}</span>
+
+                <div className="space-y-4">
+                  {(() => {
+                    const renderDetailRow = (detail: ReportDetail) => {
+                      const availableEquipments = getEquipmentsForSpace(detail.spaceId || workSpace);
+                      const hasNote = detail.note && detail.note.trim().length > 0;
+                      return (
+                        <div key={detail.id} className="flex gap-2 items-center bg-white p-2 border border-gray-200 rounded-lg shadow-sm w-full">
+                          <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-white/95 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_10px_-4px_rgba(0,0,0,0.15)] flex items-center">
+                            <select className="w-full border-gray-200 bg-gray-50 focus:bg-white p-1.5 rounded-md text-sm border truncate" value={detail.equipmentId} onChange={e => handleChangeDetail(detail.id, 'equipmentId', e.target.value)}>
+                              <option value="">- Chọn Thiết bị -</option>
+                              {equipmentDict.filter(eq => eq.validSpaces.includes(detail.spaceId || workSpace)).map(eq => <option key={eq.id} value={eq.id}>{eq.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex-1 shrink-0 min-w-[100px]">
+                            <Input value={detail.status} onChange={(e: any) => handleChangeDetail(detail.id, 'status', e.target.value)} placeholder="Tình trạng" className="w-full p-1.5 text-sm h-8" />
+                          </div>
+                          <div className="w-[100px] shrink-0 flex items-center gap-1">
+                             <Input 
+                               type="number" 
+                               step="any"
+                               value={detail.quantity} 
+                               onChange={(e: any) => handleChangeDetail(detail.id, 'quantity', e.target.value)} 
+                               className="w-full p-1.5 text-sm h-8 text-center font-medium" 
+                               placeholder="SL"
+                             />
+                             {detail.unit && <span className="text-xs text-gray-500 font-medium whitespace-nowrap">{detail.unit}</span>}
+                          </div>
+                          <div className="w-12 shrink-0 flex justify-center">
+                            <button 
+                              onClick={() => setNoteDialog({ isOpen: true, detailId: detail.id })}
+                              className={`p-1.5 rounded-md transition-colors ${hasNote ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                              title="Ghi chú"
+                            >
+                              <FileText className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <button onClick={() => handleRemoveDetail(detail.id)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    };
+
+                    const renderSpaceBlock = (spaceCode: string) => {
+                        const items = detailsList.filter(d => spaceCode ? d.spaceId === spaceCode : true);
+                        const title = spaceCode ? <><Home className="w-4 h-4"/> {spaceCode.toUpperCase()} : {items.length}</> : null;
+                        const titleClass = "text-indigo-700";
+                        
+                        return (
+                            <div key={spaceCode} className="bg-gray-50/50 p-2 sm:p-3 rounded-xl border border-gray-200 border-dashed space-y-3 overflow-x-auto relative">
+                                 {title && <h4 className={`font-bold flex items-center gap-1.5 text-sm px-1 ${titleClass}`}>{title}</h4>}
+                                 {items.length === 0 ? (
+                                     <div className="text-center py-4 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg bg-white/50">Chưa có thiết bị.</div>
+                                 ) : (
+                                     <div className="space-y-2 min-w-[600px] pb-1">
+                                         <div className="flex gap-2 items-center px-2 py-1 text-xs font-semibold text-gray-500">
+                                           <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-gray-50/90 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_8px_-4px_rgba(0,0,0,0.05)]">Thiết bị</div>
+                                           <div className="flex-1 text-center min-w-[100px]">Tình trạng</div>
+                                           <div className="w-[100px] text-center shrink-0">Số lượng</div>
+                                           <div className="w-12 text-center shrink-0">Ghi chú</div>
+                                           <div className="w-8 shrink-0"></div>
+                                         </div>
+                                         {items.map(renderDetailRow)}
+                                     </div>
+                                 )}
+                                 <div className="flex justify-end">
+                                    <Button size="sm" variant="outline" onClick={() => handleAddDetail(spaceCode || undefined)} className="text-xs h-7 px-3 bg-white hover:bg-gray-100 flex items-center gap-1 font-medium text-gray-700 border-gray-300 shadow-sm">
+                                       <Plus className="w-3.5 h-3.5" /> Thêm
+                                    </Button>
+                                 </div>
+                            </div>
+                        )
+                    };
+
+                    if (workSpace === 'Full') {
+                      return (
+                        <div className="space-y-4">
+                          {workspaces.map(ws => renderSpaceBlock(ws.name))}
+                        </div>
+                      );
+                    } else {
+                      return renderSpaceBlock(workSpace);
+                    }
+                  })()}
                 </div>
               </div>
-            </div>
-
-            <div className="space-y-4">
-              {(() => {
-                const renderDetailRow = (detail: ReportDetail) => {
-                  const availableEquipments = getEquipmentsForSpace(detail.spaceId || workSpace);
-                  const hasNote = detail.note && detail.note.trim().length > 0;
-                  return (
-                    <div key={detail.id} className="flex gap-2 items-center bg-white p-2 border border-gray-200 rounded-lg shadow-sm w-full">
-                      <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-white/95 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_10px_-4px_rgba(0,0,0,0.15)] flex items-center">
-                        <select className="w-full border-gray-200 bg-gray-50 focus:bg-white p-1.5 rounded-md text-sm border truncate" value={detail.equipmentId} onChange={e => handleChangeDetail(detail.id, 'equipmentId', e.target.value)}>
-                          <option value="">- Chọn Thiết bị -</option>
-                          {equipmentDict.filter(eq => eq.validSpaces.includes(detail.spaceId || workSpace)).map(eq => <option key={eq.id} value={eq.id}>{eq.name}</option>)}
-                        </select>
-                      </div>
-                      <div className="flex-1 shrink-0 min-w-[100px]">
-                        <Input value={detail.status} onChange={(e: any) => handleChangeDetail(detail.id, 'status', e.target.value)} placeholder="Tình trạng" className="w-full p-1.5 text-sm h-8" />
-                      </div>
-                      <div className="w-[100px] shrink-0 flex items-center gap-1">
-                         <Input 
-                           type="number" 
-                           step="any"
-                           value={detail.quantity} 
-                           onChange={(e: any) => handleChangeDetail(detail.id, 'quantity', e.target.value)} 
-                           className="w-full p-1.5 text-sm h-8 text-center font-medium" 
-                           placeholder="SL"
-                         />
-                         {detail.unit && <span className="text-xs text-gray-500 font-medium whitespace-nowrap">{detail.unit}</span>}
-                      </div>
-                      <div className="w-12 shrink-0 flex justify-center">
-                        <button 
-                          onClick={() => setNoteDialog({ isOpen: true, detailId: detail.id })}
-                          className={`p-1.5 rounded-md transition-colors ${hasNote ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
-                          title="Ghi chú"
-                        >
-                          <FileText className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <button onClick={() => handleRemoveDetail(detail.id)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded shrink-0">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  );
-                };
-
-                const renderSpaceBlock = (spaceCode: 'Indoor'|'Outdoor'|'') => {
-                    const items = detailsList.filter(d => spaceCode ? d.spaceId === spaceCode : true);
-                    const title = spaceCode === 'Indoor' ? <><Home className="w-4 h-4"/> INDOOR : {items.length}</> : spaceCode === 'Outdoor' ? <><Cloud className="w-4 h-4"/> OUTDOOR : {items.length}</> : null;
-                    const titleClass = spaceCode === 'Indoor' ? "text-indigo-700" : "text-blue-700";
-                    
-                    return (
-                        <div key={spaceCode} className="bg-gray-50/50 p-2 sm:p-3 rounded-xl border border-gray-200 border-dashed space-y-3 overflow-x-auto relative">
-                             {title && <h4 className={`font-bold flex items-center gap-1.5 text-sm px-1 ${titleClass}`}>{title}</h4>}
-                             {items.length === 0 ? (
-                                 <div className="text-center py-4 text-gray-400 text-sm border border-dashed border-gray-300 rounded-lg bg-white/50">Chưa có thiết bị.</div>
-                             ) : (
-                                 <div className="space-y-2 min-w-[600px] pb-1">
-                                     <div className="flex gap-2 items-center px-2 py-1 text-xs font-semibold text-gray-500">
-                                       <div className="w-[180px] md:w-[220px] shrink-0 sticky left-0 z-10 bg-gray-50/90 backdrop-blur-sm -ml-2 pl-2 shadow-[2px_0_8px_-4px_rgba(0,0,0,0.05)]">Thiết bị</div>
-                                       <div className="flex-1 text-center min-w-[100px]">Tình trạng</div>
-                                       <div className="w-[100px] text-center shrink-0">Số lượng</div>
-                                       <div className="w-12 text-center shrink-0">Ghi chú</div>
-                                       <div className="w-8 shrink-0"></div>
-                                     </div>
-                                     {items.map(renderDetailRow)}
-                                 </div>
-                             )}
-                             <div className="flex justify-end">
-                                <Button size="sm" variant="outline" onClick={() => handleAddDetail(spaceCode || undefined)} className="text-xs h-7 px-3 bg-white hover:bg-gray-100 flex items-center gap-1 font-medium text-gray-700 border-gray-300 shadow-sm">
-                                   <Plus className="w-3.5 h-3.5" /> Add
-                                </Button>
-                             </div>
-                        </div>
-                    )
-                };
-
-                if (workSpace === 'Full') {
-                  return (
-                    <div className="space-y-4">
-                      {renderSpaceBlock('Indoor')}
-                      {renderSpaceBlock('Outdoor')}
-                    </div>
-                  );
-                } else {
-                  return renderSpaceBlock('');
-                }
-              })()}
-            </div>
-          </div>
+            );
+          })()}
         </div>
 
-        <div className="p-4 sm:p-6 pb-8">
+        <div className="px-4 sm:px-6 pt-2 pb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Ghi chú / Nội dung chi tiết (Tùy chọn)
+          </label>
+          <textarea 
+            className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 min-h-[100px] resize-y"
+            placeholder="Nhập thêm nội dung báo cáo, ghi chú khảo sát, tình trạng chung..."
+            value={reportContent}
+            onChange={(e) => setReportContent(e.target.value)}
+          ></textarea>
+        </div>
+
+        <div className="p-4 sm:p-6 pb-8 border-t border-gray-100">
           <Button 
             className="w-full py-4 text-base sm:text-lg rounded-xl font-bold shadow-lg shadow-blue-500/20 transition-all active:scale-[0.98]" 
             onClick={handleSubmit} 
@@ -541,6 +572,11 @@ export function ReportsTab({
                           <h4 className="font-bold text-gray-900 text-sm sm:text-base">{displayStationName}</h4>
                         </div>
                         <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm text-gray-500 whitespace-nowrap">
+                          {report.taskGroupId && (
+                            <span className="bg-gray-100 px-2 py-0.5 rounded font-medium text-gray-700">
+                              {taskGroups.find(tg => tg.id === report.taskGroupId)?.name || 'CV Khác'}
+                            </span>
+                          )}
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
                             {format(parseISO(report.createdAt || report.date), 'dd/MM/yyyy HH:mm:ss')}
@@ -620,7 +656,13 @@ export function ReportsTab({
                       <p className="font-bold text-gray-900">{viewingReport.stationName || stations.find(s => s.id === viewingReport.stationId)?.name || viewingReport.stationId}</p>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-500">Ngày</p>
+                      <p className="text-sm text-gray-500">Loại công việc</p>
+                      <p className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded w-fit mt-0.5">
+                        {taskGroups.find(tg => tg.id === viewingReport.taskGroupId)?.name || viewingReport.taskGroupId || 'Không xác định'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Ngày tạo</p>
                       <p className="font-medium text-gray-900">{format(parseISO(viewingReport.createdAt || viewingReport.date), 'dd/MM/yyyy HH:mm:ss')}</p>
                     </div>
                   </div>
@@ -631,39 +673,46 @@ export function ReportsTab({
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
-                     <Settings2 className="w-5 h-5" /> Chi tiết thiết bị (Detail)
-                  </h3>
+                {(() => {
+                  const selectedTaskGroup = taskGroups.find(tg => tg.id === viewingReport.taskGroupId);
+                  const showEquipmentDetails = selectedTaskGroup?.modules?.includes('EQUIPMENT') ?? (selectedTaskGroup?.requiresEquipment !== false);
                   
-                  {(!viewingReport.equipmentDetails || viewingReport.equipmentDetails.length === 0) ? (
-                    <div className="text-center py-4 text-gray-400 bg-gray-50 rounded-lg italic">
-                      Không có thiết bị/vật tư nào được chi tiết trong báo cáo này.
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {Array.from(new Set(viewingReport.equipmentDetails.map(d => d.spaceId))).map(space => {
-                        const spaceDetails = viewingReport.equipmentDetails!.filter(d => d.spaceId === space);
-                        const isIndoor = space.toLowerCase() === 'indoor';
-                        
-                        return (
-                          <div key={space} className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-                            <div className="bg-gray-100 px-3 py-2 font-bold text-gray-800 flex items-center gap-2 border-b border-gray-200">
-                              {isIndoor ? <Home className="w-4 h-4 text-indigo-600" /> : <Cloud className="w-4 h-4 text-blue-500" />}
-                              {space.toUpperCase()}
-                            </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm text-left border-collapse">
-                                <thead className="bg-white text-gray-500 text-xs uppercase border-b">
-                                  <tr>
-                                    <th className="px-3 py-2 font-medium">Thiết bị</th>
-                                    <th className="px-3 py-2 text-center font-medium">SL</th>
-                                    <th className="px-3 py-2 font-medium">Tình trạng</th>
-                                    <th className="px-3 py-2 font-medium">Ghi chú</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {spaceDetails.map((detail, idx) => (
+                  if (!showEquipmentDetails) return null;
+
+                  return (
+                    <div className="space-y-3">
+                      <h3 className="font-semibold text-blue-700 flex items-center gap-2 border-b pb-2">
+                         <Settings2 className="w-5 h-5" /> Chi tiết thiết bị (Detail)
+                      </h3>
+                      
+                      {(!viewingReport.equipmentDetails || viewingReport.equipmentDetails.length === 0) ? (
+                        <div className="text-center py-4 text-gray-400 bg-gray-50 rounded-lg italic">
+                          Không có thiết bị/vật tư nào được chi tiết trong báo cáo này.
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {Array.from(new Set(viewingReport.equipmentDetails.map(d => d.spaceId))).map(space => {
+                            const spaceDetails = viewingReport.equipmentDetails!.filter(d => d.spaceId === space);
+                            const isIndoor = space.toLowerCase() === 'indoor';
+                            
+                            return (
+                              <div key={space} className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                                <div className="bg-gray-100 px-3 py-2 font-bold text-gray-800 flex items-center gap-2 border-b border-gray-200">
+                                  {isIndoor ? <Home className="w-4 h-4 text-indigo-600" /> : <Settings2 className="w-4 h-4 text-gray-500" />}
+                                  {space ? space.toUpperCase() : 'KHÔNG XÁC ĐỊNH'}
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm text-left border-collapse">
+                                    <thead className="bg-white text-gray-500 text-xs uppercase border-b">
+                                      <tr>
+                                        <th className="px-3 py-2 font-medium">Thiết bị</th>
+                                        <th className="px-3 py-2 text-center font-medium">SL</th>
+                                        <th className="px-3 py-2 font-medium">Tình trạng</th>
+                                        <th className="px-3 py-2 font-medium">Ghi chú</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {spaceDetails.map((detail, idx) => (
                                     <tr key={idx} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50 bg-white">
                                       <td className="px-3 py-2 font-medium text-gray-800">
                                         {equipmentDict.find(eq => eq.id === detail.equipmentId)?.name || detail.equipmentId || '-'}
@@ -683,7 +732,9 @@ export function ReportsTab({
                       })}
                     </div>
                   )}
-                </div>
+                    </div>
+                  );
+                })()}
               </div>
             </motion.div>
           </motion.div>
@@ -753,6 +804,22 @@ export function ReportsTab({
                 </Button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+        {toastMessage && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50, scale: 0.9 }} 
+            animate={{ opacity: 1, y: 0, scale: 1 }} 
+            exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+            className={cn(
+              "fixed bottom-24 left-1/2 -translate-x-1/2 z-[150] flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium",
+              toastMessage.type === 'success' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : 
+              toastMessage.type === 'error' ? "bg-rose-50 text-rose-700 border-rose-200" :
+              "bg-blue-50 text-blue-700 border-blue-200"
+            )}
+          >
+            {toastMessage.type === 'success' ? <CheckCircle className="w-5 h-5" /> : null}
+            {toastMessage.message}
           </motion.div>
         )}
       </AnimatePresence>

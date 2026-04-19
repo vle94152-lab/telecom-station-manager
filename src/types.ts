@@ -12,9 +12,16 @@ export interface Station {
   status?: 'checked' | 'unchecked';
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+}
+
 export interface TaskGroup {
   id: string; // id_nhom_cv
   name: string; // ten_nhom
+  modules?: string[]; // e.g. ['EQUIPMENT', 'PHOTO', 'NOTE']
+  requiresEquipment?: boolean; // Legacy fallback
 }
 
 export interface Attachment {

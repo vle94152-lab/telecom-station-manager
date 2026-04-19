@@ -57,7 +57,7 @@ service cloud.firestore {
              data.userId == request.auth.uid &&
              data.stationId is string &&
              data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
-             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             data.content is string && data.content.size() >= 0 && data.content.size() < 5000 &&
              data.status in ['completed', 'pending'];
     }
 

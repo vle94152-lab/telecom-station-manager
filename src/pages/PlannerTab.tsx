@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { format, addDays, subDays, parseISO } from 'date-fns';
 import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Map as MapIcon, List, Calendar, MapPin, CheckCircle, CalendarClock, Loader2, X, Crosshair, ArrowRight, Trash2, Edit2, Navigation, User as UserIcon, Phone, ClipboardCheck, Save } from 'lucide-react';
+import { Map as MapIcon, List, Calendar, MapPin, CheckCircle, CalendarClock, Loader2, X, Crosshair, ArrowRight, Trash2, Edit2, Navigation, User as UserIcon, Phone, ClipboardCheck, Save, Eye, EyeOff } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, Tooltip as LeafletTooltip } from 'react-leaflet';
 import { db } from '../firebase';
 import { Station, DailyPlan, Report } from '../types';
@@ -283,18 +283,26 @@ export function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateRe
             </div>
           </div>
           <div className="flex items-center">
-            <label className="flex items-center gap-1.5 cursor-pointer bg-white px-3 py-1.5 rounded-md border text-xs shadow-sm w-max">
-              <input type="checkbox" checked={showStationCode} onChange={(e) => setShowStationCode(e.target.checked)} className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
-              <span className="font-medium text-gray-700">Hiện mã trạm</span>
-            </label>
+            <button
+              onClick={() => setShowStationCode(!showStationCode)}
+              className={cn(
+                "flex items-center justify-center p-1.5 rounded-md border shadow-sm transition-colors cursor-pointer",
+                showStationCode 
+                  ? "bg-blue-100 border-blue-300 text-blue-700" 
+                  : "bg-white border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+              )}
+              title={showStationCode ? "Ẩn mã trạm" : "Hiện mã trạm"}
+            >
+              {showStationCode ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+            </button>
           </div>
         </div>
       </Card>
 
       <div className="h-64 w-full rounded-xl overflow-hidden border border-gray-200 z-0 relative">
         <MapContainer 
-          center={[14.0583, 108.2772]} 
-          zoom={5} 
+          center={[10.8231, 106.6297]} 
+          zoom={11} 
           style={{ height: '100%', width: '100%' }}
           touchZoom={true}
           dragging={true}
@@ -315,7 +323,7 @@ export function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateRe
           )}
           {startCoords && (
             <Marker position={startCoords}>
-              <LeafletTooltip direction="top" offset={[0, -30]} opacity={0.9} permanent={true} className="text-xs font-medium border-none shadow-sm rounded px-1.5 py-0.5 bg-green-600 text-white">
+              <LeafletTooltip direction="top" offset={[0, -32]} opacity={0.9} permanent={true} className="text-xs font-medium border-none shadow-sm rounded px-1.5 py-0.5 bg-green-600 text-white">
                 Vị trí xuất phát
               </LeafletTooltip>
             </Marker>
@@ -332,7 +340,7 @@ export function PlannerTab({ stations, dailyPlans, user, reports, onOpenCreateRe
               >
                 <LeafletTooltip 
                   direction="top" 
-                  offset={[0, -36]} 
+                  offset={[0, -32]} 
                   opacity={0.9} 
                   permanent={true}
                   className="text-xs font-bold border-none shadow-sm rounded px-1.5 py-0.5 bg-blue-600 text-white"

@@ -2,46 +2,28 @@ import L from 'leaflet';
 import { Station } from '../types';
 
 export const BRAND_COLORS = {
-  checked: '#10b981',   // xanh
-  planned: '#f59e0b',   // vàng
-  unchecked: '#f43f5e', // đỏ
+  checked: '#10b981', // Emerald 500
+  planned: '#f59e0b', // Amber 500
+  unchecked: '#f43f5e' // Rose 500
 };
 
-const createPinSvg = (color: string) => `
-<svg xmlns="http://www.w3.org/2000/svg" width="25" height="41" viewBox="0 0 25 41">
-  <path
-    d="M12.5 0C5.6 0 0 5.6 0 12.5c0 9.3 12.5 28.5 12.5 28.5S25 21.8 25 12.5C25 5.6 19.4 0 12.5 0z"
-    fill="${color}"
-    stroke="#ffffff"
-    stroke-width="1.5"
-  />
-  <circle
-    cx="12.5"
-    cy="12.5"
-    r="4.5"
-    fill="#ffffff"
-  />
-</svg>
-`;
-
-const svgToDataUrl = (svg: string) =>
-  `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-
-const createPinIcon = (color: string) =>
-  new L.Icon({
-    iconUrl: svgToDataUrl(createPinSvg(color)),
-    shadowUrl:
-      'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
+export const createSvgMarker = (color: string) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="32" height="32" style="filter: drop-shadow(0px 3px 4px rgba(0,0,0,0.4)); stroke: white; stroke-width: 0.5px;">
+    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+  </svg>`;
+  return new L.DivIcon({
+    className: 'custom-svg-marker',
+    html: svg,
+    iconSize: [32, 32],
+    iconAnchor: [16, 32],
+    popupAnchor: [0, -32]
   });
+};
 
 export const svgIcons = {
-  checked: createPinIcon(BRAND_COLORS.checked),
-  planned: createPinIcon(BRAND_COLORS.planned),
-  unchecked: createPinIcon(BRAND_COLORS.unchecked),
+  checked: createSvgMarker(BRAND_COLORS.checked),
+  planned: createSvgMarker(BRAND_COLORS.planned),
+  unchecked: createSvgMarker(BRAND_COLORS.unchecked)
 };
 
 export const formatStationName = (name: string) => {
@@ -56,9 +38,25 @@ export const formatStationName = (name: string) => {
   return name;
 };
 
-export const iconCache: Record<string, L.Icon> = {};
+export const iconCache: Record<string, L.DivIcon> = {};
 
 export const getStationIcon = (station: Station, isPlanned: boolean = false) => {
+  if (station.icon) {
+    const borderColor = station.status === 'checked' ? BRAND_COLORS.checked : (isPlanned ? BRAND_COLORS.planned : BRAND_COLORS.unchecked);
+    const cacheKey = `${station.id}-${borderColor}-${station.icon}`;
+    
+    if (!iconCache[cacheKey]) {
+      iconCache[cacheKey] = new L.DivIcon({
+        className: 'custom-station-icon',
+        html: `<div style="width: 32px; height: 32px; border-radius: 50%; overflow: hidden; border: 3px solid ${borderColor}; background-color: white; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><img src="${station.icon}" style="width: 100%; height: 100%; object-fit: cover;" /></div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 32],
+        popupAnchor: [0, -32]
+      });
+    }
+    return iconCache[cacheKey];
+  }
+  
   if (station.status === 'checked') return svgIcons.checked;
   if (isPlanned) return svgIcons.planned;
   return svgIcons.unchecked;

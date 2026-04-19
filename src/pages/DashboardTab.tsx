@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Bell, Layers, Map, ClipboardCheck, Upload, Database, PlusCircle, LogOut, CheckCircle2, History, X } from 'lucide-react';
+import { Search, Bell, Layers, Map, ClipboardCheck, Upload, Database, PlusCircle, LogOut, CheckCircle2, History, X, Eye, EyeOff } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip } from 'react-leaflet';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
@@ -90,7 +90,8 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
           stationIds: newIds
         });
       }
-      setActiveTab('planner');
+      // Khong chuyen tab tu dong de nguoi dung chon tiep
+      // setActiveTab('planner');
     } catch (err) {
       console.error('Lỗi khi thêm vào lộ trình:', err);
       alert('Không thể thêm vào lộ trình. Vui lòng kiểm tra quyền truy cập.');
@@ -240,11 +241,19 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
       <div className="px-4 mt-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-gray-900">Bản đồ tổng thể</h3>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-md border text-xs shadow-sm">
-              <input type="checkbox" checked={showStationCode} onChange={(e) => setShowStationCode(e.target.checked)} className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
-              <span className="font-medium text-gray-700">Hiện mã trạm</span>
-            </label>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowStationCode(!showStationCode)}
+              className={cn(
+                "flex items-center justify-center p-1.5 rounded-md border shadow-sm transition-colors cursor-pointer",
+                showStationCode 
+                  ? "bg-blue-50 border-blue-200 text-blue-600" 
+                  : "bg-white border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50"
+              )}
+              title={showStationCode ? "Ẩn mã trạm" : "Hiện mã trạm"}
+            >
+              {showStationCode ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+            </button>
             <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-1 rounded-full">{filteredStations.length} trạm</span>
           </div>
         </div>
@@ -286,7 +295,7 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
                 icon={getStationIcon(station, isPlanned)}
               >
                 {showStationCode && (
-                  <LeafletTooltip permanent direction="top" className="bg-white/90 backdrop-blur-sm border-gray-200 font-bold text-gray-800 text-xs px-1.5 py-0.5 rounded shadow-sm" offset={[0, -36]}>
+                  <LeafletTooltip permanent direction="top" className="bg-white/90 backdrop-blur-sm border-gray-200 font-bold text-gray-800 text-xs px-1.5 py-0.5 rounded shadow-sm" offset={[0, -32]}>
                     {formatStationName(station.name)}
                   </LeafletTooltip>
                 )}

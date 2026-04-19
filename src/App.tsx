@@ -129,6 +129,7 @@ export default function App() {
   const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
   const [equipmentDict, setEquipmentDict] = useState<EquipmentDict[]>([]);
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([]);
+  const [workspaces, setWorkspaces] = useState<{id: string, name: string}[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<ValidationWarning[] | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreateReportModalOpen, setIsCreateReportModalOpen] = useState(false);
@@ -234,7 +235,11 @@ export default function App() {
     const taskGroupUnsubscribe = onSnapshot(collection(db, 'task_groups'), async (snapshot) => {
       if (snapshot.empty) {
         const initialTaskGroups = [
-          { name: 'Lắp đặt' }, { name: 'Tích hợp' }, { name: 'Sửa chữa' }, { name: 'Thu hồi' }
+          { name: 'Lắp đặt', modules: ['EQUIPMENT', 'NOTE'] }, 
+          { name: 'Tích hợp', modules: ['EQUIPMENT', 'NOTE'] }, 
+          { name: 'Sửa chữa', modules: ['EQUIPMENT', 'NOTE'] }, 
+          { name: 'Khảo sát', modules: ['NOTE'] },
+          { name: 'Thu hồi', modules: ['EQUIPMENT', 'NOTE'] }
         ];
         for (const tg of initialTaskGroups) {
           await addDoc(collection(db, 'task_groups'), tg);
@@ -244,12 +249,24 @@ export default function App() {
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'task_groups'));
 
+    const workspacesUnsubscribe = onSnapshot(collection(db, 'workspaces'), async (snapshot) => {
+      if (snapshot.empty) {
+        const initialWorkspaces = [{ name: 'Indoor' }, { name: 'Outdoor' }];
+        for (const ws of initialWorkspaces) {
+          await addDoc(collection(db, 'workspaces'), ws);
+        }
+      } else {
+        setWorkspaces(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as {id: string, name: string})));
+      }
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'workspaces'));
+
     return () => {
       stationsUnsubscribe();
       reportsUnsubscribe();
       plansUnsubscribe();
       equipUnsubscribe();
       taskGroupUnsubscribe();
+      workspacesUnsubscribe();
     };
   }, [user]);
 
@@ -310,8 +327,8 @@ export default function App() {
         {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} logout={logout} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} setActiveTab={setActiveTab} />}
         {activeTab === 'stations' && <StationsTab key="stations" stations={stations} reports={reports} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
         {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} onOpenCreateReport={(stationId) => { setPrefilledStationId(stationId); setActiveTab('reports'); }} />}
-        {activeTab === 'admin' && <AdminTab key="admin" equipmentDict={equipmentDict} taskGroups={taskGroups} />}
-        {activeTab === 'reports' && <ReportsTab key="reports" stations={stations} user={user} equipmentDict={equipmentDict} taskGroups={taskGroups} technologies={['2G', '3G', '4G', '5G']} initialStationId={prefilledStationId} reports={reports} />}
+        {activeTab === 'admin' && <AdminTab key="admin" equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} />}
+        {activeTab === 'reports' && <ReportsTab key="reports" stations={stations} user={user} equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} technologies={['2G', '3G', '4G', '5G']} initialStationId={prefilledStationId} reports={reports} />}
       </main>
 
       {/* Bottom Navigation */}
