@@ -79,9 +79,11 @@ export interface ValidationWarning {
   id: string;
   isRead: boolean;
   name: string;
+  infrastructureCode?: string;
   address: string;
   latitude: number;
   longitude: number;
-  issue: string;
+  issue?: string;
+  issues?: string[];
   recommendation: string;
 }

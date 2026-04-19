@@ -1,12 +1,15 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Bell, Layers, Map, ClipboardCheck, Upload, Database, PlusCircle, LogOut, CheckCircle2, History, X } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip } from 'react-leaflet';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
-import { Station, Report, DailyPlan, User, ValidationWarning, Tab } from '../types';
+import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { Station, Report, DailyPlan, ValidationWarning, Tab } from '../types';
+import { User } from 'firebase/auth';
 import { Button } from '../components/ui/Button';
 import { cn } from '../lib/utils';
-import { getStationIcon } from '../lib/constants';
+import { getStationIcon, formatStationName } from '../lib/constants';
 import { MapUpdater } from '../components/MapComponents';
 
 export function DashboardTab({ stations, reports, dailyPlans, user, logout, validationWarnings, setValidationWarnings, setActiveTab }: { stations: Station[], reports: Report[], dailyPlans: DailyPlan[], user: User, logout: () => void, validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void, setActiveTab: (tab: Tab) => void }) {
@@ -44,6 +47,8 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
     return Array.from(new Set(managers)).sort();
   }, [stations]);
 
+  const [showStationCode, setShowStationCode] = useState(false);
+
   const filteredStations = useMemo(() => {
     return stations.filter(s => {
       const matchSearch = searchTerm === '' || s.name.toLowerCase().includes(searchTerm.toLowerCase()) || s.infrastructureCode?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -70,12 +75,26 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
   ];
 
   const todayStr = new Date().toISOString().split('T')[0];
-  const todayPlan = dailyPlans.find(p => p.date === todayStr && p.userId === user.id);
+  const todayPlan = dailyPlans.find(p => p.date === todayStr && p.userId === user.uid);
   const todayStationIds = todayPlan ? todayPlan.stationIds : [];
 
-  const handleAddToRoute = (station: Station) => {
-    // Basic navigation or trigger planner
-    setActiveTab('planner');
+  const handleAddToRoute = async (station: Station) => {
+    try {
+      const newIds = [...todayStationIds, station.id];
+      if (todayPlan) {
+        await updateDoc(doc(db, 'dailyPlans', todayPlan.id), { stationIds: newIds });
+      } else {
+        await addDoc(collection(db, 'dailyPlans'), {
+          userId: user.uid,
+          date: todayStr,
+          stationIds: newIds
+        });
+      }
+      setActiveTab('planner');
+    } catch (err) {
+      console.error('Lỗi khi thêm vào lộ trình:', err);
+      alert('Không thể thêm vào lộ trình. Vui lòng kiểm tra quyền truy cập.');
+    }
   };
 
   return (
@@ -163,12 +182,17 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
                           <h4 className={cn("font-bold text-xs mb-1", warning.isRead ? "text-slate-700" : "text-rose-900")}>{warning.name}</h4>
                           {warning.infrastructureCode && <p className="text-[10px] text-slate-500 mb-1">Mã: {warning.infrastructureCode}</p>}
                           <div className={cn("text-[10px] space-y-1 mb-2", warning.isRead ? "text-slate-600" : "text-rose-800")}>
-                            {warning.issues.map((issue, idx) => (
+                            {(warning.issues || []).length > 0 ? warning.issues!.map((issue, idx) => (
                               <div key={idx} className="flex items-start gap-1.5">
                                 <span className={cn("mt-0.5", warning.isRead ? "text-slate-400" : "text-rose-500")}>•</span>
                                 <span>{issue}</span>
                               </div>
-                            ))}
+                            )) : warning.issue && (
+                              <div className="flex items-start gap-1.5">
+                                <span className={cn("mt-0.5", warning.isRead ? "text-slate-400" : "text-rose-500")}>•</span>
+                                <span>{warning.issue}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="absolute top-2 right-2 flex gap-1">
@@ -198,7 +222,7 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
             <div>
               <div className="text-xs text-slate-500 font-medium mb-0.5">Tiến độ hôm nay</div>
               <div className="text-sm font-bold text-slate-800">
-                {reports.filter(r => r.date === todayStr && r.createdBy === user.email).length} / {todayStationIds.length} báo cáo
+                {reports.filter(r => r.date === todayStr && r.userId === user.uid).length} / {todayStationIds.length} báo cáo
               </div>
             </div>
           </div>
@@ -216,7 +240,13 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
       <div className="px-4 mt-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-gray-900">Bản đồ tổng thể</h3>
-          <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-1 rounded-full">{filteredStations.length} trạm</span>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-md border text-xs shadow-sm">
+              <input type="checkbox" checked={showStationCode} onChange={(e) => setShowStationCode(e.target.checked)} className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
+              <span className="font-medium text-gray-700">Hiện mã trạm</span>
+            </label>
+            <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-1 rounded-full">{filteredStations.length} trạm</span>
+          </div>
         </div>
         
         {/* Filters */}
@@ -233,12 +263,15 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
           </div>
         </div>
 
-        <div className="rounded-2xl overflow-hidden shadow-sm h-96 relative z-0 border border-gray-200">
+        <div className="rounded-2xl overflow-hidden shadow-sm h-64 relative z-0 border border-gray-200">
           <MapContainer 
-            center={[10.762622, 106.660172]} 
-            zoom={12} 
+            center={[14.0583, 108.2772]} 
+            zoom={5} 
             className="w-full h-full"
-            zoomControl={false}
+            touchZoom={true}
+            dragging={true}
+            scrollWheelZoom={true}
+            zoomControl={true}
           >
             <TileLayer
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -252,6 +285,11 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
                 position={[station.latitude, station.longitude]} 
                 icon={getStationIcon(station, isPlanned)}
               >
+                {showStationCode && (
+                  <LeafletTooltip permanent direction="top" className="bg-white/90 backdrop-blur-sm border-gray-200 font-bold text-gray-800 text-xs px-1.5 py-0.5 rounded shadow-sm" offset={[0, -36]}>
+                    {formatStationName(station.name)}
+                  </LeafletTooltip>
+                )}
                 <Popup className="custom-popup">
                   <div className="p-2 min-w-[200px]">
                     <h4 className="font-bold text-sm mb-1">{station.name}</h4>

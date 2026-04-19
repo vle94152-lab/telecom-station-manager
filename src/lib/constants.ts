@@ -8,13 +8,24 @@ export const BRAND_COLORS = {
 };
 
 export const createSvgMarker = (color: string) => {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="32" height="32" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.4)); stroke: white; stroke-width: 1.5px;"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="36" height="36" style="filter: drop-shadow(0px 3px 5px rgba(0,0,0,0.4)); stroke: white; stroke-width: 0.75px;">
+    <!-- Base tower triangle -->
+    <path d="M9 22L11 8H13L15 22H9Z" />
+    <!-- Cross bars -->
+    <path d="M9.5 18H14.5M10 13H14M10.5 9H13.5" stroke="white" stroke-width="1.5" />
+    <!-- Top bulb -->
+    <circle cx="12" cy="5" r="2.5" />
+    <!-- Signal waves left -->
+    <path d="M6 7A5 5 0 0 1 6 3M3 9A8 8 0 0 1 3 1" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" />
+    <!-- Signal waves right -->
+    <path d="M18 7A5 5 0 0 0 18 3M21 9A8 8 0 0 0 21 1" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" />
+  </svg>`;
   return new L.DivIcon({
     className: 'custom-svg-marker',
     html: svg,
-    iconSize: [32, 32],
-    iconAnchor: [16, 32],
-    popupAnchor: [0, -32]
+    iconSize: [36, 36],
+    iconAnchor: [18, 36],
+    popupAnchor: [0, -36]
   });
 };
 

@@ -166,9 +166,9 @@ export function AdminTab({ equipmentDict, taskGroups }: { equipmentDict: Equipme
           {/* TAB: EQUIPMENT */}
           {activeConfigTab === 'eq' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                <div className="text-sm text-gray-600">Quản lý danh mục thiết bị và không gian cài đặt tương ứng.</div>
-                <Button size="sm" onClick={() => setIsAddingEq(!isAddingEq)}>
+              <div className="flex flex-row justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100 gap-3">
+                <div className="text-sm font-medium text-gray-700">Danh mục thiết bị</div>
+                <Button className="whitespace-nowrap shrink-0 px-3 py-1.5 text-sm" onClick={() => setIsAddingEq(!isAddingEq)}>
                   {isAddingEq ? 'Hủy' : '+ Thêm mới'}
                 </Button>
               </div>
@@ -265,9 +265,9 @@ export function AdminTab({ equipmentDict, taskGroups }: { equipmentDict: Equipme
           {/* TAB: TASK GROUPS */}
           {activeConfigTab === 'tg' && (
             <div className="space-y-4">
-               <div className="flex justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                <div className="text-sm text-gray-600">Danh sách các nhóm công việc chính cho kỹ thuật viên.</div>
-                <Button size="sm" onClick={() => setIsAddingTaskGroup(!isAddingTaskGroup)}>
+               <div className="flex flex-row justify-between items-center bg-blue-50/50 p-3 rounded-lg border border-blue-100 gap-3">
+                <div className="text-sm font-medium text-gray-700">Nhóm công việc</div>
+                <Button className="whitespace-nowrap shrink-0 px-3 py-1.5 text-sm" onClick={() => setIsAddingTaskGroup(!isAddingTaskGroup)}>
                   {isAddingTaskGroup ? 'Hủy' : '+ Thêm mới'}
                 </Button>
               </div>
