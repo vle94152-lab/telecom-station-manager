@@ -49,24 +49,6 @@ export const formatStationName = (name: string) => {
 
 export const iconCache: Record<string, L.DivIcon> = {};
 
-export const getStationIcon = (station: Station, isPlanned: boolean = false) => {
-  if (station.icon) {
-    const borderColor = station.status === 'checked' ? BRAND_COLORS.checked : (isPlanned ? BRAND_COLORS.planned : BRAND_COLORS.unchecked);
-    const cacheKey = `${station.id}-${borderColor}-${station.icon}`;
-    
-    if (!iconCache[cacheKey]) {
-      iconCache[cacheKey] = new L.DivIcon({
-        className: 'custom-station-icon',
-        html: `<div style="width: 32px; height: 32px; border-radius: 50%; overflow: hidden; border: 3px solid ${borderColor}; background-color: white; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"><img src="${station.icon}" style="width: 100%; height: 100%; object-fit: cover;" /></div>`,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32]
-      });
-    }
-    return iconCache[cacheKey];
-  }
-  
-  if (station.status === 'checked') return svgIcons.checked;
-  if (isPlanned) return svgIcons.planned;
-  return svgIcons.unchecked;
+export const getStationIcon = (_station: Station, _isPlanned: boolean = false): any => {
+  return undefined;
 };
