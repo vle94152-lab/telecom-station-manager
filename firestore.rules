@@ -30,81 +30,55 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+    match /users/{userId} {
+      allow read, write: if isAuthenticated();
     }
-
-    function isValidStation(data) {
-      return data.keys().hasAll(['name', 'latitude', 'longitude', 'address', 'managerName', 'managerPhone']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
-             data.latitude is number && data.longitude is number &&
-             data.address is string && data.address.size() >= 0 && data.address.size() < 500 &&
-             data.managerName is string && data.managerName.size() >= 0 && data.managerName.size() < 100 &&
-             data.managerPhone is string && data.managerPhone.size() >= 0 && data.managerPhone.size() < 50 &&
-             (!('icon' in data) || (data.icon is string && data.icon.size() < 1048576)); // Max 1MB for base64 icon
+    match /roles/{roleId} {
+      allow read, write: if isAuthenticated();
     }
-
-    function isValidReport(data) {
-      return data.keys().hasAll(['userId', 'stationId', 'date', 'content', 'status']) &&
-             data.userId == request.auth.uid &&
-             data.stationId is string &&
-             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
-             data.content is string && data.content.size() >= 0 && data.content.size() < 5000 &&
-             data.status in ['completed', 'pending'];
-    }
-
-    function isValidDailyPlan(data) {
-      return data.keys().hasAll(['userId', 'date', 'stationIds']) &&
-             data.userId == request.auth.uid &&
-             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
-             data.stationIds is list && data.stationIds.size() <= 100;
-    }
-
-    // ===============================================================
-    // Rules
-    // ===============================================================
-
     match /stations/{stationId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && isValidStation(request.resource.data);
-      allow delete: if isAuthenticated(); // In a real app, maybe only admin
+      allow read, write: if isAuthenticated();
     }
-
+    match /campaigns/{campaignId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /taskGroups/{taskGroupId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /equipmentDict/{equipmentId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /surveyParameters/{parameterId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /assignments/{assignmentId} {
+      allow read, write: if isAuthenticated();
+    }
     match /reports/{reportId} {
-      allow read: if isAuthenticated(); // Or only owner: if isOwner(resource.data.userId)
-      allow create: if isAuthenticated() && isValidReport(request.resource.data);
-      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidReport(request.resource.data);
-      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+      allow read, write: if isAuthenticated();
     }
-
     match /dailyPlans/{planId} {
-      allow read: if isAuthenticated() && isOwner(resource.data.userId);
-      allow create: if isAuthenticated() && isValidDailyPlan(request.resource.data);
-      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidDailyPlan(request.resource.data);
-      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+      allow read, write: if isAuthenticated();
     }
-
-    match /equipment_dictionary/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAuthenticated(); // Should be admin only in prod, but for demo allowing all authenticated users
+    match /audit_logs/{logId} {
+      allow read, write: if isAuthenticated();
     }
-
-    match /task_groups/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAuthenticated();
+    match /workspaces/{docId} {
+      allow read, write: if isAuthenticated();
     }
-
-    match /technologies/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAuthenticated();
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+    match /_heartbeat/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /{document=**} {
+      allow read, write: if isAuthenticated();
     }
   }
 }

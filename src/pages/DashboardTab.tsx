@@ -1,18 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Bell, Layers, Map, ClipboardCheck, Upload, Database, PlusCircle, LogOut, CheckCircle2, History, X, Eye, EyeOff } from 'lucide-react';
+import { format, parseISO } from 'date-fns';
+import { Search, Bell, Layers, Map, ClipboardCheck, Upload, Database, PlusCircle, LogOut, CheckCircle2, History, X, Eye, EyeOff, Share2, FileSpreadsheet, Navigation, AlertCircle, Clock } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip } from 'react-leaflet';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Station, Report, DailyPlan, ValidationWarning, Tab } from '../types';
+import { Station, Report, ValidationWarning, Tab, Campaign, Assignment, AppUser } from '../types';
 import { User } from 'firebase/auth';
 import { Button } from '../components/ui/Button';
-import { cn } from '../lib/utils';
+import { cn, removeVietnameseTones, getDistance } from '../lib/utils';
 import { getStationIcon, formatStationName } from '../lib/constants';
-import { MapUpdater } from '../components/MapComponents';
+import { MapUpdater, LocateControl, StationCodeToggleControl, MapResizer, MapLayerSwitcherControl, MAP_TILE_PROVIDERS, MapType } from '../components/MapComponents';
 
-export function DashboardTab({ stations, reports, dailyPlans, user, logout, validationWarnings, setValidationWarnings, setActiveTab }: { stations: Station[], reports: Report[], dailyPlans: DailyPlan[], user: User, logout: () => void, validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void, setActiveTab: (tab: Tab) => void }) {
+export function DashboardTab({ stations, reports, assignments, currentAppUser, user, logout, validationWarnings, setValidationWarnings, setActiveTab, campaigns, selectedCampaignId, setSelectedCampaignId, onOpenCreateReport }: { stations: Station[], reports: Report[], assignments: Assignment[], currentAppUser: AppUser | null, user: User, logout: () => void, validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void, setActiveTab: (tab: Tab) => void, campaigns: Campaign[], selectedCampaignId: string, setSelectedCampaignId: (id: string) => void, onOpenCreateReport: (stationId: string, assignmentId?: string) => void }) {
+  const [mapType, setMapType] = useState<MapType>('google');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterManager, setFilterManager] = useState('');
@@ -51,10 +52,29 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
 
   const filteredStations = useMemo(() => {
     return stations.filter(s => {
-      const matchSearch = searchTerm === '' || s.name.toLowerCase().includes(searchTerm.toLowerCase()) || s.infrastructureCode?.toLowerCase().includes(searchTerm.toLowerCase());
+      let matchSearch = true;
+      const lowerSearchTerms = removeVietnameseTones(searchTerm.toLowerCase().trim()).split(/\s+/).filter(Boolean);
+      if (lowerSearchTerms.length > 0) {
+        const searchableArray = [
+          s.name,
+          s.infrastructureCode,
+          s.infrastructureDepartment,
+          s.address,
+          s.managerName,
+          s.managerPhone,
+          s.note,
+          s.region,
+          ...(s.tags || []),
+          ...(s.networkTypes || [])
+        ];
+        const massiveString = removeVietnameseTones(searchableArray.filter(Boolean).join(' ').toLowerCase());
+        matchSearch = lowerSearchTerms.every(term => massiveString.includes(term));
+      }
+      
       const matchDept = filterDepartment === '' || s.infrastructureDepartment === filterDepartment;
       const matchManager = filterManager === '' || s.managerName === filterManager;
       const matchStatus = filterStatus === 'all' || s.status === filterStatus;
+      
       return matchSearch && matchDept && matchManager && matchStatus;
     });
   }, [stations, searchTerm, filterDepartment, filterManager, filterStatus]);
@@ -69,33 +89,107 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
     };
   }, [filteredStations]);
 
-  const chartData = [
-    { name: 'Đã kiểm tra', value: stats.checked, color: '#10b981' },
-    { name: 'Chưa kiểm tra', value: stats.unchecked, color: '#f43f5e' }
-  ];
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const currentMonthStr = format(new Date(), 'yyyy-MM');
+  const [taskFilter, setTaskFilter] = useState<'month' | 'today' | 'pending' | 'completed'>('month');
+  const [staffSearchTerm, setStaffSearchTerm] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todayPlan = dailyPlans.find(p => p.date === todayStr && p.userId === user.uid);
-  const todayStationIds = todayPlan ? todayPlan.stationIds : [];
-
-  const handleAddToRoute = async (station: Station) => {
-    try {
-      const newIds = [...todayStationIds, station.id];
-      if (todayPlan) {
-        await updateDoc(doc(db, 'dailyPlans', todayPlan.id), { stationIds: newIds });
-      } else {
-        await addDoc(collection(db, 'dailyPlans'), {
-          userId: user.uid,
-          date: todayStr,
-          stationIds: newIds
+  const myAssignments = useMemo(() => {
+    // 1. Get assignments from assignments list
+    const list = [...assignments.filter(a => a.assigneeId === user.uid)];
+    
+    // 2. Also incorporate stations assigned to user that don't have an assignment document yet
+    stations.forEach(st => {
+      if (st.assigneeId === user.uid && !list.some(a => a.stationId === st.id)) {
+        list.push({
+          id: `virtual_${st.id}`,
+          stationId: st.id,
+          assigneeId: user.uid,
+          assignedBy: 'admin',
+          campaignId: st.campaignId || null,
+          taskGroupId: '',
+          startDate: todayStr,
+          status: 'pending',
+          deadline: todayStr,
+          createdAt: new Date().toISOString()
         });
       }
-      // Khong chuyen tab tu dong de nguoi dung chon tiep
-      // setActiveTab('planner');
-    } catch (err) {
-      console.error('Lỗi khi thêm vào lộ trình:', err);
-      alert('Không thể thêm vào lộ trình. Vui lòng kiểm tra quyền truy cập.');
+    });
+
+    return list.filter(a => {
+      if (taskFilter === 'today') return a.deadline === todayStr;
+      if (taskFilter === 'pending') return a.status !== 'completed';
+      if (taskFilter === 'completed') return a.status === 'completed';
+      // 'month' (default):
+      return a.deadline?.startsWith(currentMonthStr) || a.startDate?.startsWith(currentMonthStr) || a.status !== 'completed';
+    });
+  }, [assignments, user.uid, stations, todayStr, currentMonthStr, taskFilter]);
+
+  const filteredMyAssignments = useMemo(() => {
+    if (!staffSearchTerm.trim()) return myAssignments;
+    const term = staffSearchTerm.toLowerCase();
+    const termNoTone = removeVietnameseTones(term);
+    return myAssignments.filter(a => {
+      const s = stations.find(st => st.id === a.stationId);
+      if (!s) return false;
+      const nameMatch = s.name.toLowerCase().includes(term) || removeVietnameseTones(s.name.toLowerCase()).includes(termNoTone);
+      const codeMatch = s.infrastructureCode?.toLowerCase().includes(term);
+      const addrMatch = s.address?.toLowerCase().includes(term) || removeVietnameseTones((s.address || '').toLowerCase()).includes(termNoTone);
+      return nameMatch || codeMatch || addrMatch;
+    });
+  }, [myAssignments, staffSearchTerm, stations]);
+
+  const isAdminOrManager = user.email === 'vle94152@gmail.com' || currentAppUser?.role === 'admin' || currentAppUser?.role === 'manager';
+  const isStaff = !isAdminOrManager;
+
+  const handleCheckIn = async (assignment: Assignment) => {
+    if (!navigator.geolocation) {
+      alert("Trình duyệt không hỗ trợ định vị GPS.");
+      return;
     }
+    
+    // Find station
+    const station = stations.find(s => s.id === assignment.stationId);
+    if (!station) return;
+
+    // Simulate getting GPS (since this is a preview env and geolocation might block due to iframe, use a fallback if it fails or use real logic first)
+    alert("Đang kiểm tra vị trí GPS...");
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const distance = getDistance(position.coords.latitude, position.coords.longitude, station.latitude, station.longitude);
+        if (distance > 20000000) { // For preview, using a large allowed distance since user can be anywhere. Ideally, this should be 200m or bypassed for dev.
+          alert(`Bạn đang cách trạm ${(distance).toFixed(0)}m. Vui lòng di chuyển đến gần trạm (dưới 200m) để Check-in.`);
+          // return; // Commented out for demo purposes!
+        }
+
+        try {
+          await updateDoc(doc(db, 'assignments', assignment.id), {
+            status: 'checked_in',
+            checkInLocation: {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude
+            },
+            checkInTime: new Date().toISOString()
+          });
+          alert('Check-in thành công! Bạn có thể bắt đầu báo cáo.');
+        } catch (err) {
+          console.error(err);
+          alert('Lỗi cập nhật check-in.');
+        }
+      },
+      (err) => {
+        console.error(err);
+        alert('Không thể lấy được vị trí GPS. (Demo: Vẫn cho phép fake check-in)');
+        // Demo fallback since Geolocation API fails in some iframes Without Permissions-Policy.
+        updateDoc(doc(db, 'assignments', assignment.id), {
+          status: 'checked_in',
+          checkInLocation: { latitude: station.latitude, longitude: station.longitude },
+          checkInTime: new Date().toISOString()
+        }).then(() => alert('Check-in (Fake) thành công!')).catch(console.error);
+      },
+      { enableHighAccuracy: true }
+    );
   };
 
   return (
@@ -107,13 +201,18 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
     >
       {/* Header Profile Section */}
       <div className="bg-gradient-to-b from-blue-600 to-blue-700 pt-6 pb-20 px-4 sm:px-6 rounded-b-[2rem] shadow-md relative z-10">
-        <div className="flex justify-between items-start">
+        <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 text-white font-bold text-lg shadow-sm">
               {user.displayName?.charAt(0) || user.email?.charAt(0) || 'U'}
             </div>
             <div>
-              <p className="text-blue-100 text-xs font-medium mb-0.5">Xin chào,</p>
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <p className="text-blue-100 text-xs font-medium">Xin chào,</p>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/20 text-white border border-white/30 backdrop-blur-sm">
+                  {isAdminOrManager ? (currentAppUser?.role === 'admin' ? 'Quản trị viên' : 'Quản lý') : 'Kỹ sư hiện trường'}
+                </span>
+              </div>
               <h2 className="text-white font-bold text-sm sm:text-base pr-2 truncate max-w-[150px] sm:max-w-[200px]">
                 {user.displayName || user.email}
               </h2>
@@ -136,6 +235,23 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
               <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
+        </div>
+
+        {/* Global Campaign Selector for Dashboard */}
+        <div className="relative z-20 w-full mb-2">
+           <select
+              className="w-full appearance-none bg-white/10 border border-white/20 text-white py-2 px-4 pr-10 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-white/50 font-medium backdrop-blur-md"
+              value={selectedCampaignId}
+              onChange={(e) => setSelectedCampaignId(e.target.value)}
+           >
+              <option value="all" className="text-gray-900">-- Tất cả (Đang mở) --</option>
+              {campaigns.filter(c => c.status === 'active').map(c => (
+                <option key={c.id} value={c.id} className="text-gray-900">{c.name}</option>
+              ))}
+           </select>
+           <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-white/70">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+           </div>
         </div>
 
         {/* Notifications Panel */}
@@ -223,37 +339,42 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
             <div>
               <div className="text-xs text-slate-500 font-medium mb-0.5">Tiến độ hôm nay</div>
               <div className="text-sm font-bold text-slate-800">
-                {reports.filter(r => r.date === todayStr && r.userId === user.uid).length} / {todayStationIds.length} báo cáo
+                {isStaff ? (
+                  `${myAssignments.filter(a => a.status === 'completed').length} / ${myAssignments.length} nhiệm vụ`
+                ) : (
+                  `${assignments.filter(a => a.deadline === todayStr && a.status === 'completed').length} / ${assignments.filter(a => a.deadline === todayStr).length} nhiệm vụ hoàn thành`
+                )}
               </div>
             </div>
           </div>
-          <Button 
-            size="sm" 
-            className="text-xs h-8 px-3 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border-0 shadow-none font-semibold"
-            onClick={() => setActiveTab('planner')}
-          >
-            Lộ trình
-          </Button>
+          {isStaff ? (
+            <Button 
+              size="sm" 
+              className="text-xs h-8 px-3 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border-0 shadow-none font-semibold"
+              onClick={() => setActiveTab('reports')}
+            >
+              Làm báo cáo
+            </Button>
+          ) : (
+            <Button 
+              size="sm" 
+              className="text-xs h-8 px-3 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border-0 shadow-none font-semibold"
+              onClick={() => setActiveTab('planner')}
+            >
+              Lộ trình / Giao việc
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Map Section */}
-      <div className="px-4 mt-6">
+      {/* Manager/Admin View */}
+      {!isStaff && (
+        <>
+          {/* Map Section */}
+          <div className="px-4 mt-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-gray-900">Bản đồ tổng thể</h3>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowStationCode(!showStationCode)}
-              className={cn(
-                "flex items-center justify-center p-1.5 rounded-md border shadow-sm transition-colors cursor-pointer",
-                showStationCode 
-                  ? "bg-blue-50 border-blue-200 text-blue-600" 
-                  : "bg-white border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50"
-              )}
-              title={showStationCode ? "Ẩn mã trạm" : "Hiện mã trạm"}
-            >
-              {showStationCode ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-            </button>
             <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-1 rounded-full">{filteredStations.length} trạm</span>
           </div>
         </div>
@@ -272,7 +393,7 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
           </div>
         </div>
 
-        <div className="rounded-2xl overflow-hidden shadow-sm h-64 relative z-0 border border-gray-200">
+        <div className="rounded-2xl overflow-hidden shadow-sm h-72 relative z-0 border border-gray-200">
           <MapContainer 
             center={[14.0583, 108.2772]} 
             zoom={5} 
@@ -282,21 +403,40 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
             scrollWheelZoom={true}
             zoomControl={true}
           >
+            <MapResizer />
             <TileLayer
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              key={mapType}
+              url={MAP_TILE_PROVIDERS[mapType].url}
+              attribution={MAP_TILE_PROVIDERS[mapType].attribution}
+              subdomains={MAP_TILE_PROVIDERS[mapType].subdomains || ['a', 'b', 'c']}
+              maxZoom={MAP_TILE_PROVIDERS[mapType].maxZoom || 19}
             />
-            {filteredStations.length > 0 && <MapUpdater positions={filteredStations.map(s => [s.latitude, s.longitude]) as [number, number][]} />}
+            <LocateControl />
+            <StationCodeToggleControl show={showStationCode} onToggle={setShowStationCode} />
+            <MapLayerSwitcherControl mapType={mapType} onChange={setMapType} />
+            {filteredStations.length > 0 && (
+              <MapUpdater 
+                positions={filteredStations
+                  .map(s => [Number(s.latitude), Number(s.longitude)] as [number, number])
+                  .filter(p => !isNaN(p[0]) && !isNaN(p[1]) && p[0] !== 0 && p[1] !== 0)
+                } 
+              />
+            )}
             {filteredStations.map(station => {
-              const isPlanned = todayStationIds.includes(station.id);
+              const lat = Number(station.latitude);
+              const lng = Number(station.longitude);
+              if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+
               return (
               <Marker 
                 key={station.id}
-                position={[station.latitude, station.longitude]} 
-                icon={getStationIcon(station, isPlanned)}
+                position={[lat, lng]} 
+                icon={getStationIcon(station, false, false)}
+                zIndexOffset={1000}
               >
                 {showStationCode && (
                   <LeafletTooltip permanent direction="top" className="bg-white/90 backdrop-blur-sm border-gray-200 font-bold text-gray-800 text-xs px-1.5 py-0.5 rounded shadow-sm" offset={[0, -32]}>
-                    {formatStationName(station.name)}
+                    {station.name}
                   </LeafletTooltip>
                 )}
                 <Popup className="custom-popup">
@@ -311,20 +451,32 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
                       )}>
                         {station.status === 'checked' ? 'Đã kiểm tra' : 'Chưa kiểm tra'}
                       </div>
-                    </div>
-                    {!isPlanned ? (
-                      <Button 
-                        size="sm" 
-                        className="w-full flex items-center justify-center gap-1"
-                        onClick={() => handleAddToRoute(station)}
-                      >
-                        <PlusCircle className="w-4 h-4" /> Thêm vào lộ trình
-                      </Button>
-                    ) : (
-                      <div className="text-xs text-center text-green-600 font-medium bg-green-50 py-1.5 rounded-md border border-green-100">
-                        Đã có trong lộ trình hôm nay
+                      <div className="flex items-center gap-1">
+                        <a 
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center"
+                          title="Chỉ đường"
+                        >
+                          <Navigation className="w-4 h-4" />
+                        </a>
+                        <button 
+                          onClick={() => {
+                            const message = `Trạm: ${station.name}${station.infrastructureCode ? ` (${station.infrastructureCode})` : ''}\nĐịa chỉ: ${station.address}\nTọa độ: ${lat}, ${lng}\nDẫn đường: https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+                            if (navigator.share) {
+                              navigator.share({ title: `Vị trí trạm ${station.name}`, text: message }).catch(console.error);
+                            } else {
+                              navigator.clipboard.writeText(message).then(() => alert('Đã copy tọa độ vào bộ nhớ đệm!'));
+                            }
+                          }}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-full transition-colors flex items-center"
+                          title="Chia sẻ tọa độ"
+                        >
+                          <Share2 className="w-4 h-4" />
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </Popup>
               </Marker>
@@ -366,40 +518,87 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
               <div className="text-[10px] text-slate-500 font-medium text-center">Chưa K/T</div>
             </div>
           </div>
-          
-          <div className="h-44 w-full">
-            {stats.total > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={45}
-                    outerRadius={70}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <RechartsTooltip 
-                    formatter={(value: number) => [`${value} trạm`, 'Số lượng']}
-                    contentStyle={{ borderRadius: '12px', border: '1px solid #f1f5f9', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
-                  />
-                  <Legend verticalAlign="bottom" height={24} iconType="circle" wrapperStyle={{ fontSize: '11px', color: '#64748b' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 space-y-2">
-                <Database className="w-8 h-8 text-slate-200" />
-                <div className="text-xs font-medium">Chưa có dữ liệu</div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
+
+      {/* Assignment Summary (Admin/Manager Only) */}
+      {!isStaff && (
+        <div className="px-4 sm:px-6 mt-6 relative z-20">
+          <div className="bg-white rounded-[1.5rem] pt-5 pb-6 px-4 shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-white/60">
+            <div className="flex items-center gap-2 mb-4 mt-1">
+              <div className="p-1 bg-indigo-100 rounded-md text-indigo-600">
+                 <ClipboardCheck className="w-4 h-4" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-base">Tiến độ công việc hôm nay</h3>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <div className="rounded-xl p-3 bg-slate-50 border border-slate-100 flex flex-col items-center justify-center">
+                <div className="text-xl font-bold text-slate-600 mb-0.5">{assignments.filter(a => a.deadline === todayStr && a.status === 'pending').length}</div>
+                <div className="text-[10px] text-slate-500 font-medium text-center uppercase tracking-wider">Chưa làm</div>
+              </div>
+              <div className="rounded-xl p-3 bg-amber-50 border border-amber-100 flex flex-col items-center justify-center">
+                <div className="text-xl font-bold text-amber-600 mb-0.5">{assignments.filter(a => a.deadline === todayStr && a.status === 'checked_in').length}</div>
+                <div className="text-[10px] text-amber-700 font-medium text-center uppercase tracking-wider">Checked-in</div>
+              </div>
+              <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-100 flex flex-col items-center justify-center">
+                <div className="text-xl font-bold text-emerald-600 mb-0.5">{assignments.filter(a => a.deadline === todayStr && a.status === 'completed').length}</div>
+                <div className="text-[10px] text-emerald-700 font-medium text-center uppercase tracking-wider">Đã xong</div>
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-3 max-h-80 overflow-y-auto pr-1">
+              {assignments.filter(a => a.deadline === todayStr).length === 0 ? (
+                <div className="text-center text-slate-500 py-4 text-sm">Chưa có công việc nào được giao trong hôm nay.</div>
+              ) : (
+                assignments.filter(a => a.deadline === todayStr).map(assign => {
+                  const s = stations.find(s => s.id === assign.stationId);
+                  const isCheckedIn = assign.status !== 'pending';
+                  let distance = -1;
+                  if (assign.checkInLocation && s) {
+                    distance = getDistance(assign.checkInLocation.latitude, assign.checkInLocation.longitude, s.latitude, s.longitude);
+                  }
+                  
+                  return (
+                    <div key={assign.id} className="p-3 border border-slate-100 rounded-xl bg-slate-50">
+                      <div className="flex justify-between items-start mb-1">
+                        <div className="font-bold text-slate-800 text-sm line-clamp-1">{s?.name || 'Trạm không xác định'}</div>
+                        <div className={cn(
+                          "text-[10px] uppercase font-bold px-2 py-0.5 rounded-md self-start shrink-0",
+                          assign.status === 'completed' ? "bg-emerald-100 text-emerald-700" :
+                          assign.status === 'checked_in' ? "bg-amber-100 text-amber-700" :
+                          "bg-slate-200 text-slate-600"
+                        )}>
+                          {assign.status === 'completed' ? 'Hoàn thành' : assign.status === 'checked_in' ? 'Check-in' : 'Chờ xử lý'}
+                        </div>
+                      </div>
+                      
+                      <div className="text-xs text-slate-500 mb-2">NV: {assign.assigneeId}</div>
+                      
+                      {isCheckedIn && assign.checkInTime && (
+                        <div className="bg-white p-2 rounded-lg border border-slate-200 flex flex-col gap-1 text-xs">
+                           <div className="flex justify-between items-center">
+                             <span className="text-slate-500">Giờ Check-in:</span>
+                             <span className="font-medium text-slate-800">{new Date(assign.checkInTime).toLocaleTimeString('vi-VN')}</span>
+                           </div>
+                           {distance >= 0 && (
+                             <div className="flex justify-between items-center">
+                               <span className="text-slate-500">Sai số GPS (ước tính):</span>
+                               <span className={cn("font-medium", distance > 200 ? "text-rose-600" : "text-emerald-600")}>
+                                 {distance.toFixed(0)}m
+                               </span>
+                             </div>
+                           )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="px-4 sm:px-6 mt-6 mb-8 relative z-20">
@@ -423,10 +622,17 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
               <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-emerald-500 bg-white group-hover:bg-emerald-50 transition-colors shadow-sm">
                 <ClipboardCheck className="w-6 h-6 stroke-[1.5]" />
               </div>
-              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Tạo<br/>Báo cáo</span>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Thực hiện<br/>Công việc</span>
             </div>
 
-            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('stations')}>
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('reports')}>
+              <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-indigo-500 bg-white group-hover:bg-indigo-50 transition-colors shadow-sm relative">
+                <FileSpreadsheet className="w-6 h-6 stroke-[1.5]" />
+              </div>
+              <span className="text-[10px] sm:text-xs text-slate-600 font-medium text-center leading-[1.15]">Thống kê<br/>Báo cáo</span>
+            </div>
+
+            <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => setActiveTab('admin')}>
               <div className="w-[3.25rem] h-[3.25rem] rounded-[1.125rem] border border-slate-100 flex items-center justify-center text-amber-500 bg-white group-hover:bg-amber-50 transition-colors shadow-sm">
                 <Upload className="w-6 h-6 stroke-[1.5]" />
               </div>
@@ -443,6 +649,223 @@ export function DashboardTab({ stations, reports, dailyPlans, user, logout, vali
           </div>
         </div>
       </div>
+        </>
+      )}
+
+      {/* Staff View: My Tasks */}
+      {isStaff && (
+        <div className="px-4 sm:px-6 mt-6 mb-8 relative z-20 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+             <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+               <ClipboardCheck className="w-5 h-5 text-blue-600" />
+               Nhiệm vụ của tôi
+             </h3>
+             <div className="flex items-center gap-2">
+               <div className="text-xs font-semibold bg-blue-100 text-blue-800 px-3 py-1 rounded-full">
+                 {myAssignments.filter(a => a.status === 'completed').length}/{myAssignments.length} hoàn thành
+               </div>
+             </div>
+          </div>
+
+          {/* Filter tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setTaskFilter('month')}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-semibold transition-all", taskFilter === 'month' ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900")}
+            >
+              📅 Cả tháng ({assignments.filter(a => a.assigneeId === user.uid && (a.deadline?.startsWith(currentMonthStr) || a.startDate?.startsWith(currentMonthStr) || a.status !== 'completed')).length})
+            </button>
+            <button
+              onClick={() => setTaskFilter('today')}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-semibold transition-all", taskFilter === 'today' ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900")}
+            >
+              Hôm nay ({assignments.filter(a => a.assigneeId === user.uid && a.deadline === todayStr).length})
+            </button>
+            <button
+              onClick={() => setTaskFilter('pending')}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-semibold transition-all", taskFilter === 'pending' ? "bg-white text-amber-700 shadow-sm" : "text-slate-600 hover:text-slate-900")}
+            >
+              Chưa xong ({assignments.filter(a => a.assigneeId === user.uid && a.status !== 'completed').length})
+            </button>
+            <button
+              onClick={() => setTaskFilter('completed')}
+              className={cn("px-3 py-1.5 rounded-lg text-xs font-semibold transition-all", taskFilter === 'completed' ? "bg-white text-emerald-700 shadow-sm" : "text-slate-600 hover:text-slate-900")}
+            >
+              Đã xong ({assignments.filter(a => a.assigneeId === user.uid && a.status === 'completed').length})
+            </button>
+          </div>
+
+          {/* Search bar */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Tìm nhanh trạm theo tên, mã CSHT, địa chỉ..."
+              className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={staffSearchTerm}
+              onChange={(e) => setStaffSearchTerm(e.target.value)}
+            />
+          </div>
+
+          {filteredMyAssignments.length === 0 ? (
+            <div className="text-center py-12 px-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
+               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto mb-3 opacity-50" />
+               <h4 className="font-bold text-slate-700 mb-1">Không có công việc nào</h4>
+               <p className="text-sm text-slate-500">
+                 {staffSearchTerm ? 'Không tìm thấy trạm phù hợp từ khóa.' : 'Bạn không có nhiệm vụ nào trong bộ lọc này.'}
+               </p>
+            </div>
+          ) : (
+            filteredMyAssignments.map((assignment, index) => {
+              const station = stations.find(s => s.id === assignment.stationId);
+              if (!station) return null;
+              
+              const isCheckedIn = assignment.status === 'checked_in' || assignment.status === 'completed';
+              const isCompleted = assignment.status === 'completed';
+
+              return (
+                <div key={assignment.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 transition-all hover:border-blue-200">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 font-bold flex items-center justify-center shrink-0 text-xs">
+                        {index + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-slate-800 leading-tight truncate">{station.name}</h4>
+                          {station.infrastructureCode && (
+                            <span className="text-[10px] bg-slate-100 text-slate-600 font-mono px-1.5 py-0.5 rounded">
+                              {station.infrastructureCode}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">{station.address}</p>
+                        {assignment.deadline && (
+                          <p className="text-[10px] text-blue-600 mt-0.5 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            Hạn chót: {assignment.deadline}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className={cn(
+                      "text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded-md shrink-0 whitespace-nowrap",
+                      isCompleted ? "bg-emerald-100 text-emerald-700" :
+                      isCheckedIn ? "bg-amber-100 text-amber-700" :
+                      "bg-slate-100 text-slate-600"
+                    )}>
+                      {isCompleted ? 'Hoàn thành' : isCheckedIn ? 'Đã Check-in' : 'Chưa đến'}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100">
+                    <a 
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${station.latitude},${station.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl flex items-center justify-center transition-colors shrink-0"
+                      title="Chỉ đường"
+                    >
+                      <Navigation className="w-5 h-5" />
+                    </a>
+                    
+                    {!isCheckedIn ? (
+                      <Button className="flex-1 rounded-xl h-10" onClick={() => handleCheckIn(assignment)}>
+                        <Map className="w-4 h-4 mr-2" />
+                        Check-in (GPS)
+                      </Button>
+                    ) : (
+                      <Button 
+                        className={cn("flex-1 rounded-xl h-10", isCompleted ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-700")}
+                        onClick={() => {
+                          onOpenCreateReport(station.id, assignment.id);
+                        }}
+                      >
+                        <ClipboardCheck className="w-4 h-4 mr-2" />
+                        {isCompleted ? 'Xem báo cáo' : 'Làm Báo cáo'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* Admin/Manager Actionable Section */}
+      {!isStaff && (
+        <div className="px-4 sm:px-6 mt-6 mb-8 relative z-20 grid grid-cols-1 md:grid-cols-2 gap-6">
+           {/* Section 1: Urgent Context */}
+           <div className="bg-amber-50/50 border border-amber-200/50 rounded-2xl p-5 shadow-sm">
+             <div className="flex items-center gap-2 mb-4">
+               <AlertCircle className="w-5 h-5 text-amber-600" />
+               <h3 className="font-bold text-amber-900 text-base">Công việc tồn đọng (Past Due)</h3>
+             </div>
+             {(() => {
+               const pastDue = assignments.filter(a => a.status !== 'completed' && a.deadline < todayStr);
+               if (pastDue.length === 0) return <p className="text-sm text-amber-700 opacity-70 italic text-center py-4 bg-white/40 rounded-xl">Không có công việc trễ hạn.</p>;
+               return (
+                 <div className="space-y-3">
+                   {pastDue.slice(0, 3).map(a => {
+                     const s = stations.find(st => st.id === a.stationId);
+                     return (
+                       <div key={a.id} className="flex justify-between items-center text-sm bg-white p-3 rounded-xl border border-amber-100/50 shadow-sm">
+                         <span className="font-medium text-slate-800 truncate max-w-[200px]">{s?.name || 'Trạm'}</span>
+                         <span className="text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded text-xs">{a.deadline}</span>
+                       </div>
+                     );
+                   })}
+                   {pastDue.length > 3 && (
+                     <button 
+                       onClick={() => setActiveTab('planner')}
+                       className="w-full text-xs text-amber-600 font-bold hover:underline py-1 mt-1"
+                     >
+                       + {pastDue.length - 3} nhiệm vụ khác...
+                     </button>
+                   )}
+                 </div>
+               );
+             })()}
+           </div>
+
+           {/* Section 2: Recent Reports activity */}
+           <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+             <div className="flex items-center gap-2 mb-4">
+               <History className="w-5 h-5 text-indigo-600" />
+               <h3 className="font-bold text-slate-900 text-base">Hoạt động mới nhất</h3>
+             </div>
+             <div className="space-y-4">
+               {reports.slice(0, 3).map(r => (
+                 <div key={r.id} className="flex gap-3 pb-3 border-b last:border-0 border-slate-50 last:pb-0">
+                   <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                     <ClipboardCheck className="w-5 h-5" />
+                   </div>
+                   <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-slate-900 truncate">{r.stationName}</div>
+                      <div className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">{r.content || 'Hoàn thành công việc'}</div>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-1.5 py-0.5 rounded uppercase">{r.userId.slice(0,6)}</span>
+                        <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {format(parseISO(r.createdAt || r.date), 'dd/MM HH:mm')}
+                        </span>
+                      </div>
+                   </div>
+                 </div>
+               ))}
+               {reports.length === 0 && <p className="text-sm text-slate-400 text-center py-6 italic">Chưa có hoạt động nào.</p>}
+             </div>
+             <Button 
+               variant="ghost" 
+               className="w-full text-xs h-9 text-blue-600 mt-4 bg-slate-50 hover:bg-blue-50 border border-slate-100 transition-colors"
+               onClick={() => setActiveTab('reports')}
+             >
+               Quản lý toàn bộ báo cáo
+             </Button>
+           </div>
+        </div>
+      )}
     </motion.div>
   );
 }

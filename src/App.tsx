@@ -24,7 +24,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { Station, Report, DailyPlan, Tab, ValidationWarning, EquipmentDict, TaskGroup, ReportDetail } from './types';
+import { Station, Report, Tab, ValidationWarning, EquipmentDict, TaskGroup, ReportDetail, SurveyParameter, Campaign, AppUser, AppRole, Assignment } from './types';
 import { 
   MapPin, 
   Phone, 
@@ -117,6 +117,7 @@ import { StationsTab } from './pages/StationsTab';
 import { PlannerTab } from './pages/PlannerTab';
 import { AdminTab } from './pages/AdminTab';
 import { DashboardTab } from './pages/DashboardTab';
+import { ReportManagementTab } from './pages/ReportManagementTab';
 
 // --- Main App ---
 
@@ -124,46 +125,166 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('planner');
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('all');
   const [stations, setStations] = useState<Station[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
-  const [dailyPlans, setDailyPlans] = useState<DailyPlan[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [equipmentDict, setEquipmentDict] = useState<EquipmentDict[]>([]);
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([]);
   const [workspaces, setWorkspaces] = useState<{id: string, name: string}[]>([]);
+  const [surveyParameters, setSurveyParameters] = useState<SurveyParameter[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<ValidationWarning[] | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreateReportModalOpen, setIsCreateReportModalOpen] = useState(false);
-  const [prefilledStationId, setPrefilledStationId] = useState<string>('');
 
-  // Auth
+  // Auth & User Management
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]);
+  const [currentAppUser, setCurrentAppUser] = useState<AppUser | null>(null);
+  const [roles, setRoles] = useState<AppRole[]>([]);
+
+  const [prefilledStationId, setPrefilledStationId] = useState<string>('');
+  const [prefilledAssignmentId, setPrefilledAssignmentId] = useState<string>('');
+
+  // Define clear role roles: Admin / Manager vs Staff
+  const isAdminOrManager = user?.email === 'vle94152@gmail.com' || currentAppUser?.role === 'admin' || currentAppUser?.role === 'manager';
+  const isStaff = !isAdminOrManager;
+
+  // Helper to check permission
+  const checkPermission = (permId: string) => {
+    if (user?.email === 'vle94152@gmail.com') return true;
+    if (!currentAppUser) return false;
+    if (currentAppUser.role === 'admin') return true;
+    
+    const userRole = roles.find(r => r.id === currentAppUser.role);
+    if (userRole) {
+      return userRole.permissions?.includes(permId) || false;
+    }
+
+    return currentAppUser.permissions?.includes(permId) || false;
+  };
+
+  const hasAdminAccess = user?.email === 'vle94152@gmail.com' || currentAppUser?.role === 'admin' || (isAdminOrManager && (checkPermission('admin.users') || checkPermission('admin.campaigns') || checkPermission('admin.stations') || checkPermission('admin.tasks')));
+  const canAccessPlanner = isAdminOrManager;
+  const canAccessReports = isAdminOrManager || checkPermission('view.reports');
+
+  // Auto-redirect unauthorized users from restricted tabs
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
+    if (activeTab === 'admin' && currentAppUser && !hasAdminAccess) {
+      setActiveTab('dashboard');
+    }
+    if (activeTab === 'planner' && currentAppUser && !canAccessPlanner) {
+      setActiveTab('dashboard');
+    }
+    if (activeTab === 'reportManager' && currentAppUser && !canAccessReports) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, currentAppUser, hasAdminAccess, canAccessPlanner, canAccessReports]);
+
+  // Auto-reset selected campaign if it gets closed
+  useEffect(() => {
+    if (selectedCampaignId !== 'all') {
+      const camp = campaigns.find(c => c.id === selectedCampaignId);
+      if (!camp || camp.status === 'closed') {
+        setSelectedCampaignId('all');
+      }
+    }
+  }, [campaigns, selectedCampaignId]);
+
+  // Auto-select latest active campaign when loaded
+  useEffect(() => {
+    if (campaigns.length > 0 && selectedCampaignId === 'all') {
+      const activeCampaigns = campaigns.filter(c => c.status === 'active');
+      if (activeCampaigns.length > 0) {
+        // Sort by creation date descending
+        activeCampaigns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setSelectedCampaignId(activeCampaigns[0].id);
+      }
+    }
+  }, [campaigns]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      if (u) {
+        const userRef = doc(db, 'users', u.uid);
+        const userSnap = await getDoc(userRef);
+        if (!userSnap.exists()) {
+          const newUser: AppUser = {
+            id: u.uid,
+            email: u.email,
+            displayName: u.displayName,
+            role: 'staff', // Revert to staff by default
+            createdAt: new Date().toISOString()
+          };
+          await setDoc(userRef, newUser);
+          setCurrentAppUser(newUser);
+        } else {
+          const existingData = userSnap.data() as AppUser;
+          // Auto-promote owner to admin so you have module access
+          if (existingData.role !== 'admin' && existingData.email === 'vle94152@gmail.com') {
+             await updateDoc(userRef, { role: 'admin' });
+             existingData.role = 'admin';
+          }
+          // Backwards compatibility: treat worker as staff
+          if (existingData.role === 'worker') {
+            existingData.role = 'staff';
+          }
+          setCurrentAppUser(existingData);
+        }
+      } else {
+        setCurrentAppUser(null);
+      }
       setLoading(false);
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if(error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. ");
-        }
-        // Skip logging for other errors, as this is simply a connection test.
+    if (!user) return;
+    const usersUnsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppUser));
+      setAppUsers(usersList);
+      if (user) {
+        const current = usersList.find(u => u.id === user.uid);
+        if (current) setCurrentAppUser(current);
       }
-    }
-    testConnection();
-  }, []);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
-  const login = () => signInWithPopup(auth, new GoogleAuthProvider());
+    const rolesUnsubscribe = onSnapshot(collection(db, 'roles'), (snapshot) => {
+      setRoles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppRole)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'roles'));
+
+    return () => {
+      usersUnsubscribe();
+      rolesUnsubscribe();
+    };
+  }, [user]);
+
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const login = async () => {
+    if (isLoggingIn) return;
+    setIsLoggingIn(true);
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (error: any) {
+      if (error.code !== 'auth/cancelled-popup-request') {
+        console.error('Login failed:', error);
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
   const logout = () => signOut(auth);
 
   // Firestore Data
   useEffect(() => {
     if (!user) return;
+
+    const campaignsUnsubscribe = onSnapshot(collection(db, 'campaigns'), (snapshot) => {
+      setCampaigns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Campaign)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'campaigns'));
 
     const stationsUnsubscribe = onSnapshot(collection(db, 'stations'), (snapshot) => {
       setStations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Station)));
@@ -180,12 +301,12 @@ export default function App() {
       }
     );
 
-    const plansUnsubscribe = onSnapshot(
-      query(collection(db, 'dailyPlans'), where('userId', '==', user.uid)), 
+    const assignmentsUnsubscribe = onSnapshot(
+      collection(db, 'assignments'),
       (snapshot) => {
-        setDailyPlans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DailyPlan)));
+        setAssignments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Assignment)));
       }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'dailyPlans');
+        handleFirestoreError(error, OperationType.LIST, 'assignments');
       }
     );
 
@@ -260,13 +381,19 @@ export default function App() {
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'workspaces'));
 
+    const surveyParamsUnsubscribe = onSnapshot(collection(db, 'survey_parameters'), (snapshot) => {
+      setSurveyParameters(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SurveyParameter)).sort((a, b) => a.order - b.order));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'survey_parameters'));
+
     return () => {
+      campaignsUnsubscribe();
       stationsUnsubscribe();
       reportsUnsubscribe();
-      plansUnsubscribe();
+      assignmentsUnsubscribe();
       equipUnsubscribe();
       taskGroupUnsubscribe();
       workspacesUnsubscribe();
+      surveyParamsUnsubscribe();
     };
   }, [user]);
 
@@ -291,13 +418,26 @@ export default function App() {
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-4">Telecom Station Manager</h1>
           <p className="text-gray-600 mb-8">Quản lý trạm viễn thông, tối ưu hóa tuyến đường và báo cáo công việc hàng ngày.</p>
-          <Button onClick={login} className="w-full py-4 text-lg">
-            Đăng nhập với Google
+          <Button onClick={login} disabled={isLoggingIn} className="w-full py-4 text-lg">
+            {isLoggingIn ? 'Đang mở đăng nhập...' : 'Đăng nhập với Google'}
           </Button>
         </motion.div>
       </div>
     );
   }
+
+  const activeCampaignIds = campaigns.filter(c => c.status === 'active').map(c => c.id);
+  
+  let baseFilteredStations = selectedCampaignId === 'all' 
+    ? stations.filter(s => !s.campaignId || activeCampaignIds.includes(s.campaignId)) 
+    : stations.filter(s => s.campaignId === selectedCampaignId);
+
+  // Apply Role Base Access Control for staff
+  if (!isAdminOrManager && !checkPermission('view.all_stations')) {
+    baseFilteredStations = baseFilteredStations.filter(s => s.assigneeId === user?.uid);
+  }
+
+  const filteredStations = baseFilteredStations;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#bde0fe] via-[#e0f2fe] to-gray-50 pb-24">
@@ -309,10 +449,26 @@ export default function App() {
               <div className="bg-blue-600 p-1.5 rounded-lg">
                 <Route className="text-white w-5 h-5" />
               </div>
-              <span className="font-bold text-gray-900">TSM App</span>
+              <span className="font-bold text-gray-900 hidden sm:inline">TSM App</span>
+            </div>
+
+            <div className="flex-1 max-w-xs mx-4">
+              <div className="relative">
+                 <select
+                    className="w-full appearance-none bg-gray-50 border border-gray-200 text-gray-700 py-1.5 px-3 pr-8 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                    value={selectedCampaignId}
+                    onChange={(e) => setSelectedCampaignId(e.target.value)}
+                 >
+                    <option value="all">-- Tất cả (Đang mở) --</option>
+                    {campaigns.filter(c => c.status === 'active').map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                 </select>
+                 <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+              </div>
             </div>
             
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <span className="text-sm text-gray-500 hidden sm:block">{user.displayName}</span>
               <button onClick={logout} className="p-2 text-gray-400 hover:text-red-600 transition-colors">
                 <LogOut className="w-5 h-5" />
@@ -323,63 +479,69 @@ export default function App() {
       )}
 
       {/* Main Content */}
-      <main className={cn("mx-auto relative", activeTab !== 'dashboard' ? "p-3 sm:p-6 pb-24 max-w-4xl" : "pb-24")}>
-        {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={stations} reports={reports} dailyPlans={dailyPlans} user={user} logout={logout} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} setActiveTab={setActiveTab} />}
-        {activeTab === 'stations' && <StationsTab key="stations" stations={stations} reports={reports} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} />}
-        {activeTab === 'planner' && <PlannerTab key="planner" stations={stations} dailyPlans={dailyPlans} user={user} reports={reports} onOpenCreateReport={(stationId) => { setPrefilledStationId(stationId); setActiveTab('reports'); }} />}
-        {activeTab === 'admin' && <AdminTab key="admin" equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} />}
-        {activeTab === 'reports' && <ReportsTab key="reports" stations={stations} user={user} equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} technologies={['2G', '3G', '4G', '5G']} initialStationId={prefilledStationId} reports={reports} />}
+      <main className={cn("mx-auto relative", activeTab === 'dashboard' ? "pb-24" : (activeTab === 'planner' || activeTab === 'admin') ? "p-3 sm:p-6 pb-24 w-full" : "p-3 sm:p-6 pb-24 max-w-4xl")}>
+        {activeTab === 'dashboard' && <DashboardTab key="dashboard" stations={filteredStations} reports={reports} assignments={assignments} currentAppUser={currentAppUser} user={user} logout={logout} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} setActiveTab={setActiveTab} campaigns={campaigns} selectedCampaignId={selectedCampaignId} setSelectedCampaignId={setSelectedCampaignId} onOpenCreateReport={(stationId, assignmentId) => { setPrefilledStationId(stationId); setPrefilledAssignmentId(assignmentId || ''); setActiveTab('reports'); }} />}
+        {activeTab === 'planner' && <PlannerTab key="planner" stations={filteredStations} assignments={assignments} appUsers={appUsers} user={user} reports={reports} taskGroups={taskGroups} currentAppUser={currentAppUser} roles={roles} campaigns={campaigns} selectedCampaignId={selectedCampaignId} onOpenCreateReport={(stationId, assignmentId) => { setPrefilledStationId(stationId); setPrefilledAssignmentId(assignmentId || ''); setActiveTab('reports'); }} />}
+        {activeTab === 'admin' && <AdminTab key="admin" equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} surveyParameters={surveyParameters} stations={filteredStations} reports={reports} validationWarnings={validationWarnings} setValidationWarnings={setValidationWarnings} campaigns={campaigns} selectedCampaignId={selectedCampaignId} appUsers={appUsers} currentAppUser={currentAppUser} roles={roles} />}
+        {activeTab === 'reports' && <ReportsTab key="reports" stations={filteredStations} user={user} equipmentDict={equipmentDict} taskGroups={taskGroups} workspaces={workspaces} technologies={['2G', '3G', '4G', '5G']} initialStationId={prefilledStationId} initialAssignmentId={prefilledAssignmentId} reports={reports} surveyParameters={surveyParameters} assignments={assignments} />}
+        {activeTab === 'reportManager' && canAccessReports && <ReportManagementTab key="reportManager" reports={reports} stations={stations} taskGroups={taskGroups} equipmentDict={equipmentDict} />}
       </main>
 
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.08)] rounded-t-[2rem] z-40 pb-[env(safe-area-inset-bottom)]">
-        <div className="max-w-4xl mx-auto flex justify-between items-end px-4 sm:px-8 relative h-[4.5rem]">
+        <div className="max-w-4xl mx-auto flex justify-around items-end px-2 sm:px-6 relative h-[4.5rem]">
           <NavButton 
             active={activeTab === 'dashboard'} 
             onClick={() => setActiveTab('dashboard')} 
             icon={<Home />} 
             label="Trang chủ" 
           />
-          <NavButton 
-            active={activeTab === 'planner'} 
-            onClick={() => setActiveTab('planner')} 
-            icon={<Route />} 
-            label="Lộ trình" 
-          />
+          {canAccessPlanner && (
+            <NavButton 
+              active={activeTab === 'planner'} 
+              onClick={() => setActiveTab('planner')} 
+              icon={<Route />} 
+              label="Lộ trình" 
+            />
+          )}
           
           <div 
-             className="relative -top-5 flex flex-col items-center group cursor-pointer w-16 sm:w-20" 
-             onClick={() => { setPrefilledStationId(''); setActiveTab('reports'); }}
+             className="relative -top-5 flex flex-col items-center group cursor-pointer w-14 sm:w-16" 
+             onClick={() => { setPrefilledStationId(''); setPrefilledAssignmentId(''); setActiveTab('reports'); }}
           >
             <div className={cn(
-              "w-14 h-14 bg-white rounded-full flex items-center justify-center shadow-lg transform transition-transform group-hover:scale-105 border-[3px] border-gray-50",
+              "w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full flex items-center justify-center shadow-lg transform transition-transform group-hover:scale-105 border-[3px] border-gray-50",
                activeTab === 'reports' ? "shadow-blue-500/30" : "shadow-gray-200/50"
             )}>
                <div className={cn(
                  "w-full h-full rounded-full flex items-center justify-center transition-colors", 
                  activeTab === 'reports' ? "bg-gradient-to-tr from-blue-600 to-cyan-500 text-white" : "text-gray-500"
                )}>
-                  <span className="transform -rotate-12"><Activity className="w-6 h-6" /></span>
+                  <span className="transform -rotate-12"><Activity className="w-5 h-5 sm:w-6 sm:h-6" /></span>
                </div>
             </div>
             <span className={cn(
                "text-[9px] sm:text-[10px] mt-1 whitespace-nowrap transition-all", 
                activeTab === 'reports' ? "font-bold text-blue-600" : "font-medium text-gray-500"
-            )}>Báo cáo</span>
+            )}>Khảo sát</span>
           </div>
 
-          <NavButton 
-            active={activeTab === 'stations'} 
-            onClick={() => setActiveTab('stations')} 
-            icon={<List />} 
-            label="Danh sách" 
-          />
-          <NavButton 
-            active={activeTab === 'admin'} 
-            onClick={() => setActiveTab('admin')} 
-            icon={<Settings2 />} 
-            label="Quản trị" 
-          />
+          {canAccessReports && (
+            <NavButton 
+              active={activeTab === 'reportManager'} 
+              onClick={() => setActiveTab('reportManager')} 
+              icon={<FileSpreadsheet />} 
+              label="Thống kê" 
+            />
+          )}
+          {hasAdminAccess && (
+            <NavButton 
+              active={activeTab === 'admin'} 
+              onClick={() => setActiveTab('admin')} 
+              icon={<Database />} 
+              label="Danh mục" 
+            />
+          )}
         </div>
       </nav>
 
@@ -393,7 +555,7 @@ function NavButton({ active, onClick, icon, label }: any) {
     <button 
       onClick={onClick}
       className={cn(
-        'flex flex-col items-center gap-1 pb-2 transition-all duration-300 w-14 sm:w-16 overflow-hidden group',
+        'flex flex-col items-center gap-1 pb-2 transition-all duration-300 w-12 sm:w-14 overflow-hidden group',
         active ? 'text-blue-600' : 'text-gray-500 hover:text-gray-900'
       )}
     >

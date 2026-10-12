@@ -32,6 +32,29 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border: none !important;
 }
 
+/* Ensure Leaflet container and tiles render cleanly */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 10 !important;
+  font-family: inherit;
+  outline: none;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-pane {
+  z-index: 10 !important;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 20 !important;
+}
+
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
 }

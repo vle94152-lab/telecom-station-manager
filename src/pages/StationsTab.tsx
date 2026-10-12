@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { collection, addDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { db } from '../firebase';
-import { Station, Report, ValidationWarning } from '../types';
+import { Station, Report, ValidationWarning, AppUser } from '../types';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -12,8 +12,118 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { GoogleGenAI } from "@google/genai";
 import { handleFirestoreError } from '../lib/firebase-utils';
+import { removeVietnameseTones } from '../lib/utils';
 
-export function StationsTab({ stations, reports, validationWarnings, setValidationWarnings }: { stations: Station[], reports: Report[], validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void }) {
+function CustomFieldsEditor({ 
+  fields, 
+  onChange, 
+  allCustomKeys 
+}: { 
+  fields: Record<string, string>, 
+  onChange: (fields: Record<string, string>) => void,
+  allCustomKeys: string[]
+}) {
+  const [newKey, setNewKey] = useState('');
+  const [newValue, setNewValue] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  const suggestedKeys = allCustomKeys.filter(k => k.toLowerCase().includes(newKey.toLowerCase()) && !(fields && fields[k]));
+
+  const addField = () => {
+    if (newKey.trim() && newValue.trim()) {
+      onChange({ ...(fields || {}), [newKey.trim()]: newValue.trim() });
+      setNewKey('');
+      setNewValue('');
+      setShowSuggestions(false);
+    }
+  };
+
+  const removeField = (key: string) => {
+    const next = { ...fields };
+    delete next[key];
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-3 sm:col-span-2 mt-4 pt-4 border-t border-gray-100">
+      <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+        <Plus className="w-4 h-4 text-blue-600" />
+        Thông tin mở rộng
+      </h4>
+      
+      {fields && Object.keys(fields).length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          {Object.entries(fields).map(([k, v]) => (
+            <div key={k} className="flex gap-2 items-center bg-gray-50 border border-gray-200 rounded-lg p-2">
+              <span className="text-xs font-semibold text-gray-500 w-1/3 truncate" title={k}>{k}:</span>
+              <Input 
+                value={v} 
+                onChange={(e: any) => onChange({ ...fields, [k]: e.target.value })} 
+                className="flex-1 h-8 text-sm"
+              />
+              <button 
+                type="button" 
+                onClick={() => removeField(k)}
+                className="text-red-400 hover:text-red-600 p-1 bg-red-50 hover:bg-red-100 rounded transition-colors"
+                title={`Xóa ${k}`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-2 relative">
+        <div className="relative flex-1">
+           <Input 
+             placeholder="Tên thông tin mới (VD: Dung lượng pin...)" 
+             value={newKey} 
+             onChange={(e: any) => {
+               setNewKey(e.target.value);
+               setShowSuggestions(true);
+             }}
+             onFocus={() => setShowSuggestions(true)}
+             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+           />
+           {showSuggestions && suggestedKeys.length > 0 && (
+             <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-40 overflow-y-auto">
+               {suggestedKeys.map(sk => (
+                 <div 
+                   key={sk}
+                   className="p-2 cursor-pointer text-sm border-b border-gray-50 hover:bg-gray-50 font-medium"
+                   onClick={() => {
+                     setNewKey(sk);
+                     setShowSuggestions(false);
+                   }}
+                 >
+                   {sk}
+                 </div>
+               ))}
+             </div>
+           )}
+        </div>
+        <Input 
+          placeholder="Giá trị (VD: 200Ah)" 
+          value={newValue} 
+          onChange={(e: any) => setNewValue(e.target.value)}
+          className="flex-1"
+          onKeyDown={(e: any) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              addField();
+            }
+          }}
+        />
+        <Button type="button" onClick={addField} disabled={!newKey.trim() || !newValue.trim()} className="shrink-0 bg-gray-900 text-white hover:bg-black">
+          Thêm
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function StationsTab({ stations, reports, validationWarnings, setValidationWarnings, campaigns, selectedCampaignId, appUsers }: { stations: Station[], reports: Report[], validationWarnings: ValidationWarning[] | null, setValidationWarnings: (warnings: ValidationWarning[] | null) => void, campaigns?: import('../types').Campaign[], selectedCampaignId?: string, appUsers?: AppUser[] }) {
   const [isAdding, setIsAdding] = useState(false);
   const [search, setSearch] = useState('');
   const [newStation, setNewStation] = useState<Partial<Station>>({});
@@ -27,8 +137,9 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
   const [uploadData, setUploadData] = useState<any[]>([]);
   const [uploadHeaders, setUploadHeaders] = useState<string[]>([]);
   const [showMappingModal, setShowMappingModal] = useState(false);
+  const [mapCampaignId, setMapCampaignId] = useState('');
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({
-    stationCode: '', name: '', latitude: '', longitude: '', address: '', managerName: '', managerPhone: '', status: ''
+    infrastructureCode: '', name: '', latitude: '', longitude: '', address: '', managerName: '', managerPhone: '', status: '', infrastructureDepartment: ''
   });
 
   // Confirmation dialog state
@@ -36,9 +147,22 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
     isOpen: false, title: '', message: '', onConfirm: () => {}
   });
 
-  const [filterManagers, setFilterManagers] = useState<string[]>([]);
-  const [isManagerDropdownOpen, setIsManagerDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isStationDropdownOpen, setIsStationDropdownOpen] = useState(false);
+  const stationDropdownRef = useRef<HTMLDivElement>(null);
+
+  const allCustomKeys = useMemo(() => Array.from(new Set(stations.flatMap(s => Object.keys(s.additionalFields || {})))), [stations]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (stationDropdownRef.current && !stationDropdownRef.current.contains(event.target as Node)) {
+        setIsStationDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   const handleMarkAsRead = (id: string) => {
     if (!validationWarnings) return;
@@ -59,36 +183,35 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
 
   const unreadCount = validationWarnings ? validationWarnings.filter(w => !w.isRead).length : 0;
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsManagerDropdownOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, []);
-
-  const uniqueManagers = Array.from(new Set(stations.map(s => s.managerName).filter(Boolean)));
-
   const filteredStations = stations.filter(s => {
-    const searchLower = search.toLowerCase();
-    const matchesSearch = 
-      s.name.toLowerCase().includes(searchLower) || 
-      (s.managerName && s.managerName.toLowerCase().includes(searchLower));
-    
-    const matchesManager = filterManagers.length === 0 || filterManagers.includes(s.managerName);
+    if (!search) return true;
+    const searchTerms = removeVietnameseTones(search.toLowerCase().trim()).split(/\s+/).filter(Boolean);
+    if (searchTerms.length === 0) return true;
 
-    return matchesSearch && matchesManager;
+    const searchableArray = [
+      s.name,
+      s.infrastructureCode,
+      s.infrastructureDepartment,
+      s.address,
+      s.managerName,
+      s.managerPhone,
+      s.note,
+      s.region,
+      ...(s.tags || []),
+      ...(s.networkTypes || []),
+      s.latitude?.toString(),
+      s.longitude?.toString()
+    ];
+    const massiveString = removeVietnameseTones(searchableArray.filter(Boolean).join(' ').toLowerCase());
+    return searchTerms.every(term => massiveString.includes(term));
   });
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStation.name || !newStation.latitude || !newStation.longitude) return;
     try {
-      await addDoc(collection(db, 'stations'), newStation);
+      const targetCampaignId = selectedCampaignId !== 'all' ? selectedCampaignId : newStation.campaignId;
+      await addDoc(collection(db, 'stations'), { ...newStation, campaignId: targetCampaignId });
       setNewStation({});
       setIsAdding(false);
     } catch (err) {
@@ -214,6 +337,8 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
     setShowMappingModal(false);
     try {
       const validStations: any[] = [];
+      const mappedColValues = Object.values(columnMapping).filter(Boolean);
+
       for (const rawRow of uploadData) {
         let infrastructureCode = rawRow[columnMapping.infrastructureCode] || '';
         let name = rawRow[columnMapping.name];
@@ -240,6 +365,13 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
         const parsedLng = parseFloat(lng);
 
         if (name && String(name).trim() !== '' && lat !== undefined && lng !== undefined && !isNaN(parsedLat) && !isNaN(parsedLng)) {
+          const additionalFields: Record<string, string> = {};
+          for (const key of Object.keys(rawRow)) {
+            if (!mappedColValues.includes(key) && rawRow[key]) {
+              additionalFields[key] = String(rawRow[key]).trim();
+            }
+          }
+
           validStations.push({
             infrastructureCode: String(infrastructureCode || ''),
             name: String(name).trim(),
@@ -249,7 +381,8 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
             address: String(address || ''),
             managerName: String(managerName || ''),
             managerPhone: String(managerPhone || ''),
-            status: status
+            status: status,
+            additionalFields
           });
         }
       }
@@ -261,31 +394,68 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
       }
 
       let successCount = 0;
+      let updateCount = 0;
       let errorCount = 0;
       let errorDetails: string[] = [];
-      for (const station of validStations) {
+      
+      for (const newStationData of validStations) {
         try {
-          await addDoc(collection(db, 'stations'), station);
-          successCount++;
+          const existing = stations.find(s => 
+            (newStationData.infrastructureCode && s.infrastructureCode === newStationData.infrastructureCode) 
+            || (s.name.toLowerCase() === newStationData.name.toLowerCase())
+          );
+
+          if (existing) {
+            const updatePayload: any = {};
+            if (newStationData.infrastructureCode) updatePayload.infrastructureCode = newStationData.infrastructureCode;
+            if (newStationData.infrastructureDepartment) updatePayload.infrastructureDepartment = newStationData.infrastructureDepartment;
+            if (newStationData.latitude) updatePayload.latitude = newStationData.latitude;
+            if (newStationData.longitude) updatePayload.longitude = newStationData.longitude;
+            if (newStationData.address) updatePayload.address = newStationData.address;
+            if (newStationData.managerName) updatePayload.managerName = newStationData.managerName;
+            if (newStationData.managerPhone) updatePayload.managerPhone = newStationData.managerPhone;
+            if (newStationData.status !== 'unchecked') updatePayload.status = newStationData.status;
+
+            if (Object.keys(newStationData.additionalFields).length > 0) {
+               updatePayload.additionalFields = { 
+                 ...(existing.additionalFields || {}), 
+                 ...newStationData.additionalFields 
+               };
+            }
+
+            if (Object.keys(updatePayload).length > 0) {
+              await updateDoc(doc(db, 'stations', existing.id), updatePayload);
+              updateCount++;
+            }
+          } else {
+             const finalNewData = { ...newStationData };
+             if (selectedCampaignId && selectedCampaignId !== 'all') {
+               finalNewData.campaignId = selectedCampaignId;
+             } else if (mapCampaignId) {
+               finalNewData.campaignId = mapCampaignId;
+             }
+             await addDoc(collection(db, 'stations'), finalNewData);
+             successCount++;
+          }
         } catch (error: any) {
-          console.error("Error adding station:", station.name, error);
+          console.error("Error adding/updating station:", newStationData.name, error);
           errorCount++;
           if (errorDetails.length < 5) {
-            errorDetails.push(`Trạm ${station.name}: ${error.message}`);
+            errorDetails.push(`Trạm ${newStationData.name}: ${error.message}`);
           }
         }
       }
 
-      alert(`Đã nhập thành công ${successCount} trạm!`);
+      alert(`Xong! Đã tạo mới ${successCount} trạm, cập nhật ${updateCount} trạm.`);
 
       if (errorCount > 0) {
-        alert(`Có ${errorCount} trạm bị lỗi khi lưu vào cơ sở dữ liệu.\nChi tiết lỗi (tối đa 5):\n${errorDetails.join('\n')}\n\nVui lòng kiểm tra lại định dạng dữ liệu hoặc quyền truy cập.`);
+        alert(`Có ${errorCount} trạm bị lỗi.\nChi tiết lỗi:\n${errorDetails.join('\n')}`);
       }
     } catch (err: any) {
       console.error(err);
       let msg = err.message || 'Có lỗi xảy ra khi lưu dữ liệu.';
       if (msg.includes('Missing or insufficient permissions') || msg.includes('operationType')) {
-        msg = 'Lỗi phân quyền: Dữ liệu không hợp lệ hoặc bạn không có quyền thêm dữ liệu.';
+        msg = 'Lỗi phân quyền: Dữ liệu không hợp lệ hoặc bạn không có quyền thêm/sửa dữ liệu.';
       }
       alert(msg);
     } finally {
@@ -393,8 +563,9 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
       </AnimatePresence>
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-gray-900">Danh sách</h2>
-        <div className="flex flex-wrap gap-2">
+        {/* Hide header to merge seamlessly into AdminTab */}
+        <h2 className="text-2xl font-bold text-gray-900 hidden">Danh sách</h2>
+        <div className="flex flex-wrap gap-2 w-full justify-end">
           <Button onClick={handleDeleteAll} variant="danger" disabled={stations.length === 0}>
             <Trash2 className="w-5 h-5" />
             <span className="hidden sm:inline">Xóa tất cả</span>
@@ -416,6 +587,22 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
       {isAdding && (
         <Card className="p-4">
           <form onSubmit={handleAdd} className="space-y-4">
+            {selectedCampaignId === 'all' && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Gắn vào Đợt công việc (Bắt buộc nếu chọn "Tất cả")</label>
+                <select 
+                  required
+                  value={newStation.campaignId || ''} 
+                  onChange={(e) => setNewStation({...newStation, campaignId: e.target.value})}
+                  className="w-full sm:max-w-md border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="" disabled>-- Chọn Đợt Công Việc --</option>
+                  {campaigns?.filter(c => c.status === 'active').map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input placeholder="Mã CSHT" value={newStation.infrastructureCode || ''} onChange={(e: any) => setNewStation({...newStation, infrastructureCode: e.target.value})} />
               <Input placeholder="Tên trạm" value={newStation.name || ''} onChange={(e: any) => setNewStation({...newStation, name: e.target.value})} required />
@@ -425,6 +612,19 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
               <Input type="number" step="any" placeholder="Kinh độ (Lng)" value={newStation.longitude || ''} onChange={(e: any) => setNewStation({...newStation, longitude: parseFloat(e.target.value)})} required />
               <Input placeholder="Người quản lý" value={newStation.managerName || ''} onChange={(e: any) => setNewStation({...newStation, managerName: e.target.value})} required />
               <Input placeholder="Số điện thoại" value={newStation.managerPhone || ''} onChange={(e: any) => setNewStation({...newStation, managerPhone: e.target.value})} required />
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Giao việc cho nhân viên</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  value={newStation.assigneeId || ''}
+                  onChange={(e) => setNewStation({...newStation, assigneeId: e.target.value})}
+                >
+                  <option value="">-- Để trống (Người quản lý tự check-in hoặc chưa phân công) --</option>
+                  {appUsers?.map(u => (
+                    <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>
+                  ))}
+                </select>
+              </div>
               <div className="sm:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Biểu tượng / Hình ảnh trạm</label>
                 <div className="flex items-center gap-4">
@@ -446,61 +646,61 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
                 </div>
               </div>
             </div>
+            
+            <CustomFieldsEditor 
+              fields={newStation.additionalFields || {}} 
+              onChange={fields => setNewStation({ ...newStation, additionalFields: fields })}
+              allCustomKeys={allCustomKeys}
+            />
+
             <Button type="submit" className="w-full">Lưu trạm</Button>
           </form>
         </Card>
       )}
 
-      <div className="flex flex-col sm:flex-row gap-3 justify-between items-center">
-        <div className="relative flex-1 w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-          <Input 
-            className="pl-10 w-full" 
-            placeholder="Tìm trạm hoặc người quản lý..." 
-            value={search}
-            onChange={(e: any) => setSearch(e.target.value)}
-          />
-        </div>
-        <div className="flex gap-2 w-full sm:w-auto">
-          <div className="relative flex-1 sm:flex-none" ref={dropdownRef}>
-            <button 
-              onClick={() => setIsManagerDropdownOpen(!isManagerDropdownOpen)}
-              className="border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white flex items-center justify-between w-full min-w-[160px]"
-            >
-              <span className="truncate">
-                {filterManagers.length === 0 ? 'Tất cả QL' : `Đã chọn ${filterManagers.length}`}
-              </span>
-              <ChevronDown className="w-4 h-4 ml-2 flex-shrink-0" />
-            </button>
-            
-            {isManagerDropdownOpen && (
-              <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                <div 
-                  className="p-2 hover:bg-gray-50 cursor-pointer flex items-center gap-2"
-                  onClick={() => setFilterManagers([])}
-                >
-                  <input type="checkbox" checked={filterManagers.length === 0} readOnly className="rounded text-blue-600" />
-                  <span className="text-sm">Tất cả</span>
-                </div>
-                {uniqueManagers.map(manager => (
-                  <div 
-                    key={manager}
-                    className="p-2 hover:bg-gray-50 cursor-pointer flex items-center gap-2"
-                    onClick={() => {
-                      if (filterManagers.includes(manager)) {
-                        setFilterManagers(filterManagers.filter(m => m !== manager));
-                      } else {
-                        setFilterManagers([...filterManagers, manager]);
-                      }
-                    }}
-                  >
-                    <input type="checkbox" checked={filterManagers.includes(manager)} readOnly className="rounded text-blue-600" />
-                    <span className="text-sm">{manager}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+      <div className="flex flex-col sm:flex-row gap-3 justify-between items-center relative z-[60]">
+        <div className="relative flex-1 w-full" ref={stationDropdownRef}>
+          <div className="relative">
+            <Input 
+              type="text"
+              className="w-full pr-10" 
+              placeholder="Tìm theo tên hoặc mã CSHT..." 
+              value={search}
+              onChange={(e: any) => {
+                setSearch(e.target.value);
+                setIsStationDropdownOpen(true);
+              }}
+              onFocus={() => setIsStationDropdownOpen(true)}
+            />
+            <Search className="w-4 h-4 absolute right-3 top-3 text-gray-400 pointer-events-none" />
           </div>
+
+          <AnimatePresence>
+            {isStationDropdownOpen && search && (
+              <motion.div 
+                initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.15 }}
+                className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+              >
+                {filteredStations.length === 0 ? (
+                  <div className="p-3 text-sm text-gray-500 italic text-center">Không tìm thấy trạm phù hợp.</div>
+                ) : (
+                  filteredStations.map(s => (
+                    <div 
+                      key={s.id}
+                      className="p-3 cursor-pointer border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors"
+                      onClick={() => {
+                        setSearch(s.name);
+                        setIsStationDropdownOpen(false);
+                      }}
+                    >
+                      <div className="font-medium text-sm text-gray-900">{s.name}</div>
+                      <div className="text-xs text-gray-500 font-mono mt-0.5">{s.infrastructureCode || 'Chưa cập nhật mã'}</div>
+                    </div>
+                  ))
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -509,6 +709,21 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
         <Card key={station.id} className="p-4 group">
             {editingStation?.id === station.id ? (
               <form onSubmit={handleEdit} className="space-y-4">
+                {selectedCampaignId === 'all' && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Đổi Đợt công việc (Tùy chọn)</label>
+                    <select 
+                      value={editingStation.campaignId || ''} 
+                      onChange={(e) => setEditingStation({...editingStation, campaignId: e.target.value})}
+                      className="w-full sm:max-w-md border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                      <option value="">-- Thuộc về Đợt chung / Mặc định --</option>
+                      {campaigns?.filter(c => c.status === 'active' || c.id === editingStation.campaignId).map(c => (
+                        <option key={c.id} value={c.id}>{c.name} {c.status === 'closed' ? '(Đã đóng)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input placeholder="Mã CSHT" value={editingStation.infrastructureCode || ''} onChange={(e: any) => setEditingStation({...editingStation, infrastructureCode: e.target.value})} />
                   <Input placeholder="Tên trạm" value={editingStation.name || ''} onChange={(e: any) => setEditingStation({...editingStation, name: e.target.value})} required />
@@ -518,6 +733,19 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
                   <Input type="number" step="any" placeholder="Kinh độ (Lng)" value={editingStation.longitude || ''} onChange={(e: any) => setEditingStation({...editingStation, longitude: parseFloat(e.target.value)})} required />
                   <Input placeholder="Người quản lý" value={editingStation.managerName || ''} onChange={(e: any) => setEditingStation({...editingStation, managerName: e.target.value})} required />
                   <Input placeholder="Số điện thoại" value={editingStation.managerPhone || ''} onChange={(e: any) => setEditingStation({...editingStation, managerPhone: e.target.value})} required />
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Giao việc cho nhân viên</label>
+                    <select
+                      className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      value={editingStation.assigneeId || ''}
+                      onChange={(e) => setEditingStation({...editingStation, assigneeId: e.target.value})}
+                    >
+                      <option value="">-- Để trống (Người quản lý tự check-in hoặc chưa phân công) --</option>
+                      {appUsers?.map(u => (
+                        <option key={u.id} value={u.id}>{u.displayName} ({u.email})</option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="sm:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Biểu tượng / Hình ảnh trạm</label>
                     <div className="flex items-center gap-4">
@@ -539,6 +767,13 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
                     </div>
                   </div>
                 </div>
+                
+                <CustomFieldsEditor 
+                  fields={editingStation.additionalFields || {}} 
+                  onChange={fields => setEditingStation({ ...editingStation, additionalFields: fields })}
+                  allCustomKeys={allCustomKeys}
+                />
+
                 <div className="flex gap-2">
                   <Button type="submit" className="flex-1">Lưu thay đổi</Button>
                   <Button type="button" variant="secondary" onClick={() => setEditingStation(null)}>Hủy</Button>
@@ -631,7 +866,27 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
                           </div>
                         </div>
                         <div className="space-y-3">
-                          <h4 className="text-sm font-semibold text-gray-900">Vị trí bản đồ</h4>
+                          <h4 className="text-sm font-semibold text-gray-900 flex items-center justify-between">
+                            Phân công & Lộ trình
+                          </h4>
+                          {station.assigneeId ? (() => {
+                            const assignee = appUsers?.find(u => u.id === station.assigneeId);
+                            return (
+                              <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg">
+                                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                                  <UserIcon className="w-5 h-5" />
+                                </div>
+                                <div>
+                                  <div className="text-xs text-indigo-500 font-medium tracking-wide uppercase">Người phụ trách</div>
+                                  <div className="font-medium text-indigo-900">{assignee?.displayName || assignee?.email || station.assigneeId}</div>
+                                </div>
+                              </div>
+                            );
+                          })() : (
+                            <div className="p-3 bg-gray-50 rounded-lg text-sm text-gray-500 italic text-center">
+                              Chưa gắn nhân viên phụ trách
+                            </div>
+                          )}
                           <a 
                             href={`https://www.google.com/maps/dir/?api=1&destination=${station.latitude},${station.longitude}`}
                             target="_blank"
@@ -650,6 +905,20 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
                           </a>
                         </div>
                       </div>
+
+                      {station.additionalFields && Object.keys(station.additionalFields).length > 0 && (
+                        <div className="mt-2 pt-3 border-t border-gray-100">
+                          <h4 className="text-sm font-semibold text-gray-900 mb-3">Thông tin mở rộng</h4>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                            {Object.entries(station.additionalFields).map(([k, v]) => (
+                               <div key={k} className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
+                                 <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 truncate">{k}</div>
+                                 <div className="text-sm font-medium text-gray-900 truncate" title={v}>{v}</div>
+                               </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -669,7 +938,7 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
         {confirmDialog.isOpen && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4"
           >
             <motion.div 
               initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
@@ -691,7 +960,7 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
         {showMappingModal && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4"
           >
             <motion.div 
               initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
@@ -700,6 +969,23 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
               <h3 className="text-xl font-bold text-gray-900 mb-4">Ghép nối cột dữ liệu</h3>
               <p className="text-gray-600 mb-6">Vui lòng chọn cột tương ứng từ file của bạn cho các trường dữ liệu bên dưới.</p>
               
+              {selectedCampaignId === 'all' && (
+                <div className="mb-6 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                  <label className="block text-sm font-bold text-blue-900 mb-2">Ghi chú: Bạn đang ở chế độ xem "Tất cả Đợt CV".<br/>Vui lòng chọn đợt công việc muốn gắn cho các trạm này:</label>
+                  <select 
+                    required
+                    value={mapCampaignId} 
+                    onChange={(e) => setMapCampaignId(e.target.value)}
+                    className="w-full border border-blue-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                  >
+                    <option value="" disabled>-- Chọn Đợt Công Việc --</option>
+                    {campaigns?.filter(c => c.status === 'active').map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="space-y-4 mb-6">
                 {[
                   { key: 'infrastructureCode', label: 'Mã CSHT' },
@@ -730,7 +1016,7 @@ export function StationsTab({ stations, reports, validationWarnings, setValidati
 
               <div className="flex justify-end gap-3">
                 <Button variant="secondary" onClick={() => setShowMappingModal(false)}>Hủy</Button>
-                <Button onClick={processUpload} disabled={!columnMapping.name || !columnMapping.latitude || !columnMapping.longitude}>
+                <Button onClick={processUpload} disabled={!columnMapping.name || !columnMapping.latitude || !columnMapping.longitude || (selectedCampaignId === 'all' && !mapCampaignId)}>
                   Xác nhận & Nhập dữ liệu
                 </Button>
               </div>
